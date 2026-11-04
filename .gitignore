@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.env
+.env.*
+
+# 회의 녹음과 전사 결과, 사내 용어는 커밋하지 않는다
+recordings/
+outputs/
+glossary.txt
+*.wav
+*.m4a
+*.mp3
+*.flac
+jobs/
+jobs-fake/
+.playwright-mcp/
