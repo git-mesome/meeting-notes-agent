@@ -52,7 +52,7 @@ def test_word_without_timestamp_keeps_turn_order():
         "speaker": "SPEAKER_00",
         "words": [{"word": "2026", "speaker": "SPEAKER_01"}, word("년", 6.0, 7.0, "SPEAKER_01")],
     }
-    assert [(t["start"], t["speaker"], t["text"]) for t in to_turns([segment])] == [(5.0, "SPEAKER_01", "2026 년")]
+    assert to_turns([segment]) == [{"start": 5.0, "end": 7.0, "speaker": "SPEAKER_01", "text": "2026 년"}]
 
 
 def test_segment_without_words_is_kept():

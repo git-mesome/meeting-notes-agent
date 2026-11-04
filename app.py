@@ -86,7 +86,9 @@ def notes_title(notes, fallback):
 def default_process(audio, out_dir, on_stage):
     from meeting_notes import load_glossary, process_audio
 
-    return process_audio(audio, out_dir, load_glossary(Path("glossary.txt")), on_stage)
+    glossary_path = Path("glossary.txt")
+    glossary = load_glossary(glossary_path) if glossary_path.exists() else []
+    return process_audio(audio, out_dir, glossary, on_stage)
 
 
 class JobStore:

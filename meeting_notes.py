@@ -77,7 +77,9 @@ def to_turns(segments):
         speaker = segment.get("speaker", "UNKNOWN")
         words = segment.get("words")
         if not words:
-            turns.append({"start": segment["start"], "speaker": speaker, "text": segment["text"].strip()})
+            turns.append(
+                {"start": segment["start"], "end": segment["end"], "speaker": speaker, "text": segment["text"].strip()}
+            )
             continue
         turn = None
         for word in words:
@@ -89,7 +91,12 @@ def to_turns(segments):
             turn["words"].append(word["word"])
             turn["end"] = word.get("end", turn["end"])
     return [
-        {"start": t["start"], "speaker": t["speaker"], "text": " ".join(t["words"]) if "words" in t else t["text"]}
+        {
+            "start": t["start"],
+            "end": t["end"],
+            "speaker": t["speaker"],
+            "text": " ".join(t["words"]) if "words" in t else t["text"],
+        }
         for t in turns
     ]
 
@@ -119,30 +126,41 @@ def write_notes(transcript, glossary):
     return notes, message.usage
 
 
+def load_glossary(path):
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [line.strip() for line in lines if line.strip()]
+
+
+def process_audio(audio, out_dir, glossary, on_stage=lambda stage: None):
+    """녹음 하나를 처리해 out_dir에 결과를 저장하고 사용한 토큰 수를 돌려준다. 전사 JSON이 있으면 전사를 건너뛴다."""
+    transcript_json = out_dir / f"{audio.stem}.json"
+    if not transcript_json.exists():
+        on_stage("transcribing")
+        transcribe(audio, out_dir, glossary)
+
+    segments = json.loads(transcript_json.read_text(encoding="utf-8"))["segments"]
+    turns = to_turns(segments)
+    transcript = format_transcript(turns)
+    (out_dir / "transcript.txt").write_text(transcript + "\n", encoding="utf-8")
+    (out_dir / "turns.json").write_text(json.dumps(turns, ensure_ascii=False), encoding="utf-8")
+
+    on_stage("writing")
+    notes, usage = write_notes(transcript, glossary)
+    (out_dir / "notes.md").write_text(notes + "\n", encoding="utf-8")
+    return {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("audio", type=Path)
     parser.add_argument("--glossary", type=Path, help="한 줄에 용어 하나씩 적은 파일")
     args = parser.parse_args()
 
-    glossary = []
-    if args.glossary:
-        lines = args.glossary.read_text(encoding="utf-8").splitlines()
-        glossary = [line.strip() for line in lines if line.strip()]
-
+    glossary = load_glossary(args.glossary) if args.glossary else []
     out_dir = Path("outputs") / args.audio.stem
-    transcript_json = out_dir / f"{args.audio.stem}.json"
-    if not transcript_json.exists():
-        transcribe(args.audio, out_dir, glossary)
-
-    segments = json.loads(transcript_json.read_text(encoding="utf-8"))["segments"]
-    transcript = format_transcript(to_turns(segments))
-    (out_dir / "transcript.txt").write_text(transcript + "\n", encoding="utf-8")
-
-    notes, usage = write_notes(transcript, glossary)
-    (out_dir / "notes.md").write_text(notes + "\n", encoding="utf-8")
+    usage = process_audio(args.audio, out_dir, glossary)
     print(f"저장 위치: {out_dir}/notes.md")
-    print(f"토큰: 입력 {usage.input_tokens}, 출력 {usage.output_tokens}")
+    print(f"토큰: 입력 {usage['input_tokens']}, 출력 {usage['output_tokens']}")
 
 
 if __name__ == "__main__":
