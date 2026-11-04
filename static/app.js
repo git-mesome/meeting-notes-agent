@@ -397,7 +397,7 @@ function speakerStats(turns, duration) {
 function renderRibbon(turns, duration, stats, seek) {
   const ribbon = el("section", { class: "ribbon", "aria-label": "시간대별 화자" });
   const cursors = [];
-  for (const { speaker, share, index } of stats) {
+  for (const { speaker, share, index } of stats.filter((item) => item.speaker !== "UNKNOWN")) {
     const track = el("div", {
       class: "ribbon-track",
       onclick: (event) => {

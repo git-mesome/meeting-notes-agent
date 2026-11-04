@@ -34,8 +34,8 @@ COOKIE_MAX_AGE = 30 * 24 * 3600
 JOB_ID = re.compile(r"[0-9a-f]{32}")
 ACTIVE_STATUSES = ("queued", "transcribing", "writing")
 
-# 노트북 CPU에서 large-v3로 잰 값이다. 음성 1초를 처리하는 데 약 2.7초가 걸렸다.
-SECONDS_PER_AUDIO_SECOND = 2.7
+# 노트북 CPU에서 large-v3로 잰 값이다. 음성 1초를 처리하는 데 2.2~2.7초가 걸렸다.
+SECONDS_PER_AUDIO_SECOND = 2.5
 
 FAILURE_MESSAGES = {
     "transcribing": "음성을 글로 옮기지 못했습니다. 다시 시도하세요.",
@@ -81,6 +81,11 @@ def notes_title(notes, fallback):
     first_line = notes.strip().splitlines()[0] if notes.strip() else ""
     title = re.sub(r"^#\s*(회의록\s*:\s*)?", "", first_line).strip() if first_line.startswith("#") else ""
     return title or fallback
+
+
+def find_audio(job_dir):
+    """올린 녹음을 찾는다. WhisperX가 audio.json도 만들므로 확장자까지 확인한다."""
+    return next(path for path in job_dir.iterdir() if path.stem == "audio" and path.suffix in ALLOWED_SUFFIXES)
 
 
 def default_process(audio, out_dir, on_stage):
@@ -141,7 +146,7 @@ class Worker(threading.Thread):
 
     def handle(self, job_id):
         job_dir = self.store.path(job_id)
-        audio = next(job_dir.glob("audio.*"))
+        audio = find_audio(job_dir)
 
         def on_stage(stage):
             self.store.update(job_id, status=stage, stage_started_at=now())
@@ -338,7 +343,7 @@ def create_app(data_dir="jobs", access_code=None, process=default_process):
     @app.get("/api/jobs/{job_id}/audio")
     def audio(job_id: str):
         get_job(job_id)
-        return FileResponse(next(store.path(job_id).glob("audio.*")))
+        return FileResponse(find_audio(store.path(job_id)))
 
     @app.get("/api/jobs/{job_id}/download")
     def download(job_id: str):

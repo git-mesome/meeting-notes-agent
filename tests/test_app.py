@@ -12,8 +12,10 @@ NOTES = "# 회의록: 예시 회의\n\n## 요약\n- 내용이다. [00:01]\n"
 TURNS = [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00", "text": "예시 발언이다."}]
 
 
-def fake_process(_audio, out_dir, on_stage):
+def fake_process(audio, out_dir, on_stage):
     on_stage("transcribing")
+    assert audio.suffix == ".m4a"
+    (out_dir / "audio.json").write_text("{}", encoding="utf-8")
     (out_dir / "turns.json").write_text(json.dumps(TURNS, ensure_ascii=False), encoding="utf-8")
     on_stage("writing")
     (out_dir / "notes.md").write_text(NOTES, encoding="utf-8")
@@ -153,7 +155,8 @@ def test_audio_supports_range_requests(client, tone):
     job_id = wait_for(client, upload(client, tone), "done")["id"]
     response = client.get(f"/api/jobs/{job_id}/audio", headers={"Range": "bytes=0-9"})
     assert response.status_code == 206
-    assert len(response.content) == 10
+    assert response.content == tone[:10]
+    assert response.headers["content-type"] == "audio/mp4"
 
 
 def test_failure_can_be_retried_without_exposing_details(tmp_path, tone):
@@ -174,6 +177,25 @@ def test_failure_can_be_retried_without_exposing_details(tmp_path, tone):
         assert "비밀" not in json.dumps(failed, ensure_ascii=False)
         assert test_client.post(f"/api/jobs/{job_id}/retry").status_code == 200
         assert wait_for(test_client, job_id, "done")["error"] is None
+
+
+def test_retry_uses_audio_not_transcript_json(tmp_path, tone):
+    seen = []
+
+    def flaky(audio, out_dir, on_stage):
+        seen.append(audio.name)
+        (out_dir / "audio.json").write_text("{}", encoding="utf-8")
+        if len(seen) == 1:
+            raise RuntimeError("실패")
+        return fake_process(audio, out_dir, on_stage)
+
+    with make_client(tmp_path, flaky) as test_client:
+        test_client.post("/api/login", json={"code": CODE})
+        job_id = upload(test_client, tone)
+        wait_for(test_client, job_id, "failed")
+        test_client.post(f"/api/jobs/{job_id}/retry")
+        wait_for(test_client, job_id, "done")
+    assert seen == ["audio.m4a", "audio.m4a"]
 
 
 def test_retry_is_refused_for_finished_job(client, tone):
