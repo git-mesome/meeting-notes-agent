@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#e6ece6" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#14222b" media="(prefers-color-scheme: dark)" />
+    <title>회의록</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <svg width="0" height="0" aria-hidden="true" class="filters">
+      <filter id="stamp-rough">
+        <feTurbulence type="fractalNoise" baseFrequency="0.09" numOctaves="2" seed="4" result="noise" />
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.6" />
+      </filter>
+    </svg>
+    <main id="app"></main>
+    <noscript>회의록을 쓰려면 브라우저에서 JavaScript를 켜세요.</noscript>
+  </body>
+</html>
