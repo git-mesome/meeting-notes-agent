@@ -507,29 +507,62 @@ svg.icon {
 }
 
 .ribbon h2 {
-  margin: 0 0 0.75rem;
+  margin: 0;
   color: var(--ink);
   font-size: 1.125rem;
   font-weight: 700;
 }
 
+.ribbon-hint {
+  margin: 0.15rem 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
 .ribbon-row {
   display: grid;
-  grid-template-columns: 5.25rem minmax(0, 1fr);
+  grid-template-columns: 6.5rem 2.25rem minmax(0, 1fr);
   align-items: center;
-  gap: 0.5rem;
-  min-height: 1.75rem;
-  font-size: 0.8125rem;
+  gap: 0.25rem;
+  min-height: 2.25rem;
+  font-size: 0.875rem;
   font-variant-numeric: tabular-nums;
 }
 
-.ribbon-label {
+.ribbon-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  min-height: 2.25rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
   font-weight: 600;
+  text-align: left;
+  transition: transform 0.1s;
+}
+
+.ribbon-name:active {
+  transform: scale(0.96);
+}
+
+.ribbon-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ribbon-label span {
+.ribbon-name svg.icon {
+  width: 0.95em;
+  height: 0.95em;
   color: var(--muted);
+}
+
+.ribbon-share {
+  color: var(--muted);
+  font-size: 0.8125rem;
   font-weight: 500;
 }
 
@@ -755,6 +788,16 @@ svg.icon {
   margin-left: 0;
   background: var(--soft);
   color: var(--sub);
+}
+
+.speaker-name {
+  padding: 0.1rem 0.15rem;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
 }
 
 /* 수정 */
@@ -1022,6 +1065,56 @@ svg.icon {
 
 .sheet-actions .button {
   flex: 1;
+}
+
+.sample {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 16px;
+  background: var(--soft);
+}
+
+.sample-text {
+  display: -webkit-box;
+  margin: 0 0 0.75rem;
+  overflow: hidden;
+  color: var(--body);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.sample .button {
+  width: 100%;
+  min-height: 2.75rem;
+  background: var(--surface);
+  font-size: 0.9375rem;
+}
+
+.text-input {
+  display: block;
+  width: 100%;
+  min-height: 3.25rem;
+  margin-top: 1rem;
+  padding: 0 1rem;
+  border: 0;
+  border-radius: 14px;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 1.0625rem;
+  font-weight: 500;
+}
+
+.text-input::placeholder {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.input-hint {
+  margin: 0.4rem 0.25rem 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
 }
 
 .sheet-menu {

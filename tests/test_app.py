@@ -2,6 +2,7 @@ import json
 import subprocess
 import threading
 import time
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -366,6 +367,90 @@ def test_delete_from_another_site_is_refused(client, tone, tmp_path):
 def test_delete_unknown_job_is_not_found(client, job_id, tmp_path):
     assert client.delete(f"/api/jobs/{job_id}").status_code in (404, 405)
     assert tmp_path.exists()
+
+
+SPEAKER_TURNS = [
+    {"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00", "text": "짧은 발언이다."},
+    {"start": 2.0, "end": 12.0, "speaker": "SPEAKER_01", "text": "긴 발언이다."},
+    {"start": 12.0, "end": 12.5, "speaker": "UNKNOWN", "text": "알 수 없는 발언이다."},
+]
+
+
+@pytest.fixture
+def speaker_job(client, tone, tmp_path):
+    job_id = wait_for(client, upload(client, tone), "done")["id"]
+    (tmp_path / job_id / "turns.json").write_text(json.dumps(SPEAKER_TURNS, ensure_ascii=False), encoding="utf-8")
+    client.put(f"/api/jobs/{job_id}/notes", json={"notes": "# 회의록: SPEAKER_01의 보고\n\n- 담당: SPEAKER_00\n"})
+    return job_id
+
+
+def test_speakers_are_numbered_by_speaking_time(client, speaker_job):
+    speakers = client.get(f"/api/jobs/{speaker_job}").json()["speakers"]
+    assert [(s["label"], s["name"], s["custom"], s["known"]) for s in speakers] == [
+        ("SPEAKER_01", "화자 1", False, True),
+        ("SPEAKER_00", "화자 2", False, True),
+        ("UNKNOWN", "알 수 없음", False, False),
+    ]
+    assert speakers[0]["share"] == 80
+
+
+def test_rename_speaker_keeps_notes_file_and_clears_confirmation(client, speaker_job, tmp_path):
+    client.post(f"/api/jobs/{speaker_job}/confirm")
+    job = client.put(f"/api/jobs/{speaker_job}/speakers/SPEAKER_01", json={"name": "  김  길동 "}).json()
+    assert job["speakers"][0]["name"] == "김 길동"
+    assert job["speakers"][0]["custom"] is True
+    assert job["speakers"][0]["default_name"] == "화자 1"
+    assert job["confirmed_at"] is None
+    assert "SPEAKER_00" in (tmp_path / speaker_job / "notes.md").read_text(encoding="utf-8")
+
+
+def test_empty_name_restores_default(client, speaker_job):
+    client.put(f"/api/jobs/{speaker_job}/speakers/SPEAKER_01", json={"name": "길동"})
+    job = client.put(f"/api/jobs/{speaker_job}/speakers/SPEAKER_01", json={"name": "   "}).json()
+    assert job["speakers"][0]["name"] == "화자 1"
+    assert job["speakers"][0]["custom"] is False
+
+
+def test_download_uses_speaker_names(client, speaker_job):
+    client.put(f"/api/jobs/{speaker_job}/speakers/SPEAKER_01", json={"name": "길동"})
+    response = client.get(f"/api/jobs/{speaker_job}/download")
+    assert response.text == "# 회의록: 길동의 보고\n\n- 담당: 화자 2\n"
+    assert response.headers["content-type"].startswith("text/markdown")
+    assert quote("길동") in response.headers["content-disposition"]
+
+
+@pytest.mark.parametrize("label", ["UNKNOWN", "SPEAKER_99", "nope"])
+def test_rename_unknown_speaker_is_not_found(client, speaker_job, label):
+    assert client.put(f"/api/jobs/{speaker_job}/speakers/{label}", json={"name": "길동"}).status_code == 404
+
+
+@pytest.mark.parametrize("name", ["a|b", "**굵게**", "[00:10]"])
+def test_rename_rejects_markdown_characters(client, speaker_job, name):
+    response = client.put(f"/api/jobs/{speaker_job}/speakers/SPEAKER_01", json={"name": name})
+    assert response.status_code == 400
+    assert client.get(f"/api/jobs/{speaker_job}").json()["speakers"][0]["custom"] is False
+
+
+def test_rename_rejects_long_name(client, speaker_job):
+    assert client.put(f"/api/jobs/{speaker_job}/speakers/SPEAKER_01", json={"name": "가" * 21}).status_code == 422
+
+
+def test_rename_from_another_site_is_refused(client, speaker_job):
+    response = client.put(
+        f"/api/jobs/{speaker_job}/speakers/SPEAKER_01", json={"name": "변조"}, headers={"Origin": "https://evil.example"}
+    )
+    assert response.status_code == 403
+
+
+def test_rename_before_done_is_refused(tmp_path, tone):
+    started, processes = threading.Event(), []
+    with make_client(tmp_path, long_running_process(started, processes)) as test_client:
+        job_id = upload(test_client, tone)
+        assert started.wait(5)
+        response = test_client.put(f"/api/jobs/{job_id}/speakers/SPEAKER_00", json={"name": "길동"})
+        assert response.status_code == 409
+        test_client.post(f"/api/jobs/{job_id}/cancel")
+        processes[0].wait(5)
 
 
 def test_retry_is_refused_for_finished_job(client, tone):

@@ -16,6 +16,7 @@ const ICONS = {
   back: "M15 5l-7 7 7 7",
   next: "M9 5l7 7-7 7",
   more: "M5 12h.01M12 12h.01M19 12h.01",
+  play: "M8 5l11 7-11 7z",
   stop: "M7 7h10v10H7z",
   alert: "M12 8v5m0 3.5h.01M12 3l9.5 17h-19z",
 };
@@ -457,36 +458,15 @@ function renderNotes(markdown, onTime) {
 
 /* 상세 */
 
-function speakerStats(turns, duration) {
-  const totals = new Map();
-  for (const turn of turns) {
-    totals.set(turn.speaker, (totals.get(turn.speaker) || 0) + (turn.end - turn.start));
-  }
-  const sum = [...totals.values()].reduce((a, b) => a + b, 0) || duration || 1;
-  let rank = 0;
-  return [...totals.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([speaker, seconds]) => {
-      const known = speaker !== "UNKNOWN";
-      if (known) rank += 1;
-      return {
-        speaker,
-        known,
-        name: known ? `화자 ${rank}` : "알 수 없음",
-        share: Math.round((seconds / sum) * 100),
-        index: known ? (rank - 1) % 6 : 0,
-      };
-    });
-}
-
-function renderRibbon(turns, duration, stats, seek) {
+function renderRibbon(turns, duration, speakers, seek, onName) {
   const ribbon = el(
     "section",
     { class: "ribbon card" },
     el("h2", { text: "누가 얼마나 말했나요" }),
+    el("p", { class: "ribbon-hint", text: "이름을 누르면 들어 보고 바꿀 수 있어요" }),
   );
   const cursors = [];
-  for (const { speaker, name, share, index } of stats.filter((item) => item.known)) {
+  for (const speaker of speakers.filter((item) => item.known)) {
     const track = el("div", {
       class: "ribbon-track",
       onclick: (event) => {
@@ -494,7 +474,7 @@ function renderRibbon(turns, duration, stats, seek) {
         seek(((event.clientX - box.left) / box.width) * duration);
       },
     });
-    for (const turn of turns.filter((item) => item.speaker === speaker)) {
+    for (const turn of turns.filter((item) => item.speaker === speaker.label)) {
       const block = el("i");
       block.style.left = `${(turn.start / duration) * 100}%`;
       block.style.width = `${((turn.end - turn.start) / duration) * 100}%`;
@@ -507,8 +487,19 @@ function renderRibbon(turns, duration, stats, seek) {
     ribbon.append(
       el(
         "div",
-        { class: `ribbon-row speaker-${index}` },
-        el("div", { class: "ribbon-label" }, `${name} `, el("span", { text: `${share}%` })),
+        { class: `ribbon-row speaker-${speaker.color}` },
+        el(
+          "button",
+          {
+            class: "ribbon-name",
+            type: "button",
+            "aria-label": `${speaker.name} 이름 바꾸기`,
+            onclick: () => onName(speaker),
+          },
+          el("span", { class: "ribbon-name-text", text: speaker.name }),
+          icon("pencil"),
+        ),
+        el("span", { class: "ribbon-share", text: `${speaker.share}%` }),
         track,
       ),
     );
@@ -563,17 +554,27 @@ function renderEditor(job) {
       },
     }),
   });
+  // 화면과 같은 이름으로 보여 주고, 아직 정하지 않은 "화자 N"은 저장할 때 원래 라벨로 되돌린다.
+  // 그래야 나중에 이름을 정해도 본문에 반영된다.
+  const names = new Map(job.speakers.map((item) => [item.label, item.name]));
+  const shown = job.notes.replace(/SPEAKER_\d+/g, (label) => names.get(label) || label);
+  const defaults = job.speakers
+    .filter((item) => item.known && !item.custom)
+    .sort((a, b) => b.default_name.length - a.default_name.length);
+  const toStored = (text) =>
+    defaults.reduce((result, item) => result.replaceAll(item.default_name, item.label), text);
+
   const area = el("textarea", { "aria-label": "회의록 내용" });
-  area.value = job.notes;
+  area.value = shown;
   area.addEventListener("input", () => {
-    unsaved = area.value !== job.notes;
+    unsaved = area.value !== shown;
   });
   const save = button("저장하기", {
     variant: "primary",
     onclick: async () => {
       save.disabled = true;
       try {
-        const updated = await api(`/api/jobs/${job.id}/notes`, jsonOptions("PUT", { notes: area.value }));
+        const updated = await api(`/api/jobs/${job.id}/notes`, jsonOptions("PUT", { notes: toStored(area.value) }));
         toast("저장했어요");
         renderDetail(updated);
       } catch (error) {
@@ -629,7 +630,7 @@ function openMoreMenu(job) {
   ]);
 }
 
-function renderDetail(job, { justConfirmed = false } = {}) {
+function renderDetail(job, { justConfirmed = false, restore = null } = {}) {
   const page = setScreen({
     wide: true,
     back: true,
@@ -640,8 +641,7 @@ function renderDetail(job, { justConfirmed = false } = {}) {
     ),
   });
   const { turns, duration_seconds: duration } = job;
-  const stats = speakerStats(turns, duration);
-  const speakers = new Map(stats.map((item) => [item.speaker, item]));
+  const speakers = new Map(job.speakers.map((item) => [item.label, item]));
   const friendly = (text) => text.replace(/SPEAKER_\d+/g, (label) => speakers.get(label)?.name || label);
 
   const audio = el("audio", { src: `/api/jobs/${job.id}/audio`, preload: "metadata" });
@@ -666,7 +666,7 @@ function renderDetail(job, { justConfirmed = false } = {}) {
       {},
       el(
         "div",
-        { class: `transcript-head speaker-${speaker.index}` },
+        { class: `transcript-head speaker-${speaker.color}` },
         el("button", {
           class: "time-ref",
           type: "button",
@@ -674,7 +674,15 @@ function renderDetail(job, { justConfirmed = false } = {}) {
           "aria-label": `${clock(turn.start)}부터 듣기`,
           onclick: () => seek(turn.start),
         }),
-        speaker.name,
+        speaker.known
+          ? el("button", {
+              class: "speaker-name",
+              type: "button",
+              text: speaker.name,
+              "aria-label": `${speaker.name} 이름 바꾸기`,
+              onclick: () => openSpeakerSheet(speaker),
+            })
+          : speaker.name,
       ),
       turn.text,
     );
@@ -703,7 +711,87 @@ function renderDetail(job, { justConfirmed = false } = {}) {
     audio.play().catch(() => {});
   }
 
-  const ribbon = renderRibbon(turns, duration, stats, seek);
+  function currentView() {
+    return { scrollY: window.scrollY, showNotes: notesTab.getAttribute("aria-selected") === "true", time: audio.currentTime };
+  }
+
+  function openSpeakerSheet(speaker) {
+    const samples = turns
+      .filter((turn) => turn.speaker === speaker.label)
+      .sort((a, b) => b.end - b.start - (a.end - a.start))
+      .slice(0, 5);
+    let sampleIndex = 0;
+    let sampleEnd = null;
+    const stopAtSampleEnd = () => {
+      if (sampleEnd !== null && audio.currentTime >= sampleEnd) {
+        audio.pause();
+        sampleEnd = null;
+      }
+    };
+    audio.addEventListener("timeupdate", stopAtSampleEnd);
+
+    const quote = el("p", { class: "sample-text", text: "무슨 말을 했는지 들어 보고 이름을 정해 보세요." });
+    const listen = button("들어 보기", {
+      iconName: "play",
+      onclick: () => {
+        const sample = samples[sampleIndex];
+        quote.textContent = `${clock(sample.start)}  ${sample.text}`;
+        sampleEnd = sample.end;
+        seek(sample.start);
+        sampleIndex = (sampleIndex + 1) % samples.length;
+        if (samples.length > 1) listen.lastChild.textContent = "다른 부분 듣기";
+      },
+    });
+    const input = el("input", {
+      class: "text-input",
+      type: "text",
+      maxlength: 20,
+      placeholder: speaker.default_name,
+      "aria-label": "화자 이름",
+      autocomplete: "off",
+    });
+    input.value = speaker.custom ? speaker.name : "";
+
+    const view = currentView();
+    const sheet = openSheet((close) => {
+      const save = el("button", { class: "button primary", type: "submit", text: "저장" });
+      return [
+        el("h2", { text: "이 사람은 누구인가요?" }),
+        el("div", { class: "sample" }, quote, listen),
+        el(
+          "form",
+          {
+            onsubmit: async (event) => {
+              event.preventDefault();
+              save.disabled = true;
+              try {
+                const updated = await api(
+                  `/api/jobs/${job.id}/speakers/${speaker.label}`,
+                  jsonOptions("PUT", { name: input.value }),
+                );
+                close();
+                toast(input.value.trim() ? "이름을 바꿨어요" : "기본 이름으로 되돌렸어요");
+                renderDetail(updated, { restore: view });
+              } catch (error) {
+                toast(error.message, true);
+                save.disabled = false;
+              }
+            },
+          },
+          input,
+          el("p", { class: "input-hint", text: `비워 두면 '${speaker.default_name}'로 표시돼요.` }),
+          el("div", { class: "sheet-actions" }, button("취소", { onclick: close }), save),
+        ),
+      ];
+    });
+    sheet.addEventListener("close", () => {
+      audio.removeEventListener("timeupdate", stopAtSampleEnd);
+      if (sampleEnd !== null) audio.pause();
+      sampleEnd = null;
+    });
+  }
+
+  const ribbon = renderRibbon(turns, duration, job.speakers, seek, openSpeakerSheet);
 
   audio.addEventListener("timeupdate", () => {
     timeLabel.textContent = `${clock(audio.currentTime)} / ${clock(duration)}`;
@@ -733,7 +821,7 @@ function renderDetail(job, { justConfirmed = false } = {}) {
   };
   notesTab.addEventListener("click", () => selectTab(true));
   transcriptTab.addEventListener("click", () => selectTab(false));
-  selectTab(true);
+  selectTab(restore ? restore.showNotes : true);
 
   const confirmButton = job.confirmed_at
     ? button("확정됨", { variant: "done", disabled: true, iconName: "check" })
@@ -744,7 +832,7 @@ function renderDetail(job, { justConfirmed = false } = {}) {
           try {
             const updated = await api(`/api/jobs/${job.id}/confirm`, { method: "POST" });
             toast("회의록을 확정했어요");
-            renderDetail(updated, { justConfirmed: true });
+            renderDetail(updated, { justConfirmed: true, restore: currentView() });
           } catch (error) {
             toast(error.message, true);
             confirmButton.disabled = false;
@@ -772,6 +860,15 @@ function renderDetail(job, { justConfirmed = false } = {}) {
       confirmButton,
     ),
   );
+
+  if (restore) {
+    window.scrollTo(0, restore.scrollY);
+    if (restore.time) {
+      audio.addEventListener("loadedmetadata", () => {
+        audio.currentTime = restore.time;
+      }, { once: true });
+    }
+  }
 }
 
 function statusMark(job) {

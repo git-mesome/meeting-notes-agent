@@ -15,10 +15,10 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -46,6 +46,9 @@ RAW_SUFFIXES = {
 ALLOWED_HOSTS = ["127.0.0.1", "localhost", "*.ts.net"]
 READ_ONLY_METHODS = {"GET", "HEAD", "OPTIONS"}
 JOB_ID = re.compile(r"[0-9a-f]{32}")
+SPEAKER_LABEL = re.compile(r"SPEAKER_\d+")
+# 회의록 마크다운에 그대로 들어가므로 표와 강조, 시각 표시에 쓰는 기호를 막는다.
+FORBIDDEN_NAME_CHARS = re.compile(r"[|*\[\]]")
 ACTIVE_STATUSES = ("queued", "transcribing", "writing")
 
 # 노트북 CPU에서 large-v3로 잰 값이다. 음성 1초를 처리하는 데 2.2~2.7초가 걸렸다.
@@ -249,6 +252,38 @@ def public_job(job, ahead=0):
     return view
 
 
+def speaker_list(turns, custom_names):
+    """말한 시간이 긴 순서로 화자를 정리한다. 이름을 정하지 않은 화자는 "화자 N"으로 부른다."""
+    totals = {}
+    for turn in turns:
+        totals[turn["speaker"]] = totals.get(turn["speaker"], 0) + turn["end"] - turn["start"]
+    total = sum(totals.values()) or 1
+    speakers = []
+    rank = 0
+    for label, seconds in sorted(totals.items(), key=lambda item: item[1], reverse=True):
+        known = label != "UNKNOWN"
+        rank += known
+        default_name = f"화자 {rank}" if known else "알 수 없음"
+        custom = custom_names.get(label)
+        speakers.append(
+            {
+                "label": label,
+                "name": custom or default_name,
+                "default_name": default_name,
+                "custom": bool(custom),
+                "known": known,
+                "share": round(seconds / total * 100),
+                "color": (rank - 1) % 6 if known else 0,
+            }
+        )
+    return speakers
+
+
+def apply_speaker_names(text, speakers):
+    names = {speaker["label"]: speaker["name"] for speaker in speakers}
+    return SPEAKER_LABEL.sub(lambda match: names.get(match.group(), match.group()), text)
+
+
 def public_jobs(store):
     jobs = store.all()
     active = sorted((j for j in jobs if j["status"] in ACTIVE_STATUSES), key=lambda j: j["created_at"])
@@ -258,6 +293,10 @@ def public_jobs(store):
 
 class NotesUpdate(BaseModel):
     notes: str = Field(min_length=1, max_length=1_000_000)
+
+
+class SpeakerName(BaseModel):
+    name: str = Field(max_length=20)
 
 
 def create_app(data_dir="jobs", process=default_process):
@@ -295,6 +334,9 @@ def create_app(data_dir="jobs", process=default_process):
         if job is None:
             raise HTTPException(404, "회의록을 찾을 수 없어요.")
         return job
+
+    def load_turns(job_id):
+        return json.loads((store.path(job_id) / "turns.json").read_text(encoding="utf-8"))
 
     def require_done(job):
         if job["status"] != "done":
@@ -361,12 +403,13 @@ def create_app(data_dir="jobs", process=default_process):
 
     @app.get("/api/jobs/{job_id}")
     def read_job(job_id: str):
-        get_job(job_id)
+        job = get_job(job_id)
         view = next(view for view in public_jobs(store) if view["id"] == job_id)
         job_dir = store.path(job_id)
         if view["status"] == "done":
             view["notes"] = (job_dir / "notes.md").read_text(encoding="utf-8")
-            view["turns"] = json.loads((job_dir / "turns.json").read_text(encoding="utf-8"))
+            view["turns"] = load_turns(job_id)
+            view["speakers"] = speaker_list(view["turns"], job.get("speaker_names") or {})
             view["edited"] = (job_dir / "notes.draft.md").exists()
         return view
 
@@ -382,6 +425,23 @@ def create_app(data_dir="jobs", process=default_process):
         temp.write_text(body.notes, encoding="utf-8")
         os.replace(temp, notes_path)
         store.update(job_id, title=notes_title(body.notes, job["name"]), confirmed_at=None)
+        return read_job(job_id)
+
+    @app.put("/api/jobs/{job_id}/speakers/{label}")
+    def rename_speaker(job_id: str, label: str, body: SpeakerName):
+        job = get_job(job_id)
+        require_done(job)
+        if not SPEAKER_LABEL.fullmatch(label) or all(turn["speaker"] != label for turn in load_turns(job_id)):
+            raise HTTPException(404, "화자를 찾을 수 없어요.")
+        name = " ".join(body.name.split())
+        if FORBIDDEN_NAME_CHARS.search(name):
+            raise HTTPException(400, "이름에 | * [ ] 기호는 쓸 수 없어요.")
+        names = dict(job.get("speaker_names") or {})
+        if name:
+            names[label] = name
+        else:
+            names.pop(label, None)
+        store.update(job_id, speaker_names=names, confirmed_at=None)
         return read_job(job_id)
 
     @app.post("/api/jobs/{job_id}/confirm")
@@ -428,9 +488,14 @@ def create_app(data_dir="jobs", process=default_process):
     def download(job_id: str):
         job = get_job(job_id)
         require_done(job)
-        safe_title = re.sub(r'[\\/:*?"<>|\r\n]', "_", job["title"] or job["name"])[:80]
-        return FileResponse(
-            store.path(job_id) / "notes.md", media_type="text/markdown", filename=f"회의록 {safe_title}.md"
+        speakers = speaker_list(load_turns(job_id), job.get("speaker_names") or {})
+        notes = (store.path(job_id) / "notes.md").read_text(encoding="utf-8")
+        title = apply_speaker_names(job["title"] or job["name"], speakers)
+        safe_title = re.sub(r'[\\/:*?"<>|\r\n]', "_", title)[:80]
+        return Response(
+            apply_speaker_names(notes, speakers),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(f'회의록 {safe_title}.md')}"},
         )
 
     @app.get("/")
