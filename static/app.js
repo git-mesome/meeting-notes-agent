@@ -9,15 +9,15 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 
 const ICONS = {
   upload: "M12 16V4m0 0L7 9m5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3",
-  calendar: "M7 3v3m10-3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z",
-  clock: "M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z",
   check: "M5 12.5 10 17.5 19 7.5",
   pencil: "M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4",
   download: "M12 4v12m0 0 5-5m-5 5-5-5M4 20h16",
   trash: "M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3",
   back: "M15 5l-7 7 7 7",
+  next: "M9 5l7 7-7 7",
+  more: "M5 12h.01M12 12h.01M19 12h.01",
   stop: "M7 7h10v10H7z",
-  restart: "M4 12a8 8 0 0 1 14-5.3L20 9m0-5v5h-5M20 12a8 8 0 0 1-14 5.3L4 15m0 5v-5h5",
+  alert: "M12 8v5m0 3.5h.01M12 3l9.5 17h-19z",
 };
 const PLAY_ICON = "M7 4l13 8-13 8z";
 const PAUSE_ICON = "M6 4h4v16H6zM14 4h4v16h-4z";
@@ -50,14 +50,58 @@ function icon(name) {
   return svg;
 }
 
-function button(label, options = {}) {
-  const { iconName, variant, onclick, disabled } = options;
+function button(label, { variant = "soft", onclick, disabled, iconName } = {}) {
   return el(
     "button",
-    { class: ["button", variant].filter(Boolean).join(" "), type: "button", onclick, disabled },
+    { class: `button ${variant}`, type: "button", onclick, disabled },
     iconName ? icon(iconName) : null,
     label,
   );
+}
+
+function toast(message, isError = false) {
+  document.querySelector(".toast")?.remove();
+  const node = el("div", { class: `toast ${isError ? "error" : ""}`, role: isError ? "alert" : "status", text: message });
+  document.body.append(node);
+  setTimeout(() => node.remove(), isError ? 4500 : 2500);
+}
+
+/* 아래에서 올라오는 창 */
+
+function openSheet(build) {
+  const sheet = el("dialog", { class: "sheet" });
+  const close = () => sheet.close();
+  sheet.append(el("div", { class: "sheet-body" }, ...build(close)));
+  sheet.addEventListener("click", (event) => {
+    if (event.target === sheet) close();
+  });
+  sheet.addEventListener("close", () => sheet.remove());
+  document.body.append(sheet);
+  sheet.showModal();
+  return sheet;
+}
+
+function confirmSheet({ title, body, action, danger = false }) {
+  return new Promise((resolve) => {
+    let result = false;
+    const sheet = openSheet((close) => [
+      el("h2", { text: title }),
+      body ? el("p", { text: body }) : null,
+      el(
+        "div",
+        { class: "sheet-actions" },
+        button("취소", { onclick: close }),
+        button(action, {
+          variant: danger ? "danger" : "primary",
+          onclick: () => {
+            result = true;
+            close();
+          },
+        }),
+      ),
+    ]);
+    sheet.addEventListener("close", () => resolve(result));
+  });
 }
 
 class ApiError extends Error {}
@@ -66,7 +110,7 @@ async function api(path, options = {}) {
   const response = await fetch(path, options);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const detail = typeof body.detail === "string" ? body.detail : "요청을 처리하지 못했습니다. 다시 시도하세요.";
+    const detail = typeof body.detail === "string" ? body.detail : "요청을 처리하지 못했어요. 다시 시도해 주세요.";
     throw new ApiError(detail);
   }
   return body;
@@ -104,27 +148,31 @@ function dateText(iso) {
   }).format(new Date(iso));
 }
 
-function metaRow(job, ...extras) {
-  return el(
-    "div",
-    { class: "meta" },
-    el("span", {}, icon("calendar"), dateText(job.created_at)),
-    el("span", {}, icon("clock"), spanOfTime(job.duration_seconds)),
-    ...extras,
-  );
+function metaText(job) {
+  return `${dateText(job.created_at)}, ${spanOfTime(job.duration_seconds)} 녹음`;
 }
 
-function stateText(job) {
-  if (job.status === "queued") {
-    return job.ahead ? `대기 중입니다. 앞에 ${job.ahead}건이 있습니다.` : "곧 시작합니다.";
-  }
+function displayName(job) {
+  return job.title || job.name.replace(/\.[^.]+$/, "");
+}
+
+function headline(job) {
+  if (job.status === "queued") return job.ahead ? "순서를 기다리고 있어요" : "곧 시작해요";
+  if (job.status === "transcribing") return "말을 글로 옮기고 있어요";
+  if (job.status === "writing") return "회의록을 쓰고 있어요";
+  if (job.status === "canceled") return "처리를 멈췄어요";
+  if (job.status === "failed") return "회의록을 만들지 못했어요";
+  return "";
+}
+
+function detailText(job) {
+  if (job.status === "queued") return job.ahead ? `앞에 ${job.ahead}건이 있어요` : "";
   if (job.status === "transcribing") {
     const left = job.estimated_seconds - job.elapsed_seconds;
-    if (left <= 0) return "말을 글로 옮기는 중입니다. 예상보다 오래 걸리고 있습니다.";
-    return `말을 글로 옮기는 중입니다. 약 ${spanOfTime(left)} 남았습니다.`;
+    return left > 0 ? `약 ${spanOfTime(left)} 남았어요` : "예상보다 오래 걸리고 있어요";
   }
-  if (job.status === "writing") return "회의록을 쓰는 중입니다. 곧 끝납니다.";
-  if (job.status === "canceled") return "처리를 중지했습니다.";
+  if (job.status === "writing") return "거의 다 됐어요";
+  if (job.status === "canceled") return `다시 시작하면 약 ${spanOfTime(job.estimated_seconds)} 걸려요`;
   if (job.status === "failed") return job.error;
   return "";
 }
@@ -149,76 +197,76 @@ function meter(fraction) {
   return el("div", { class: "meter" }, fill);
 }
 
-function statusPill(job, animate = false) {
+function badge(job, animate = false) {
   if (job.status === "done" && job.confirmed_at) {
-    return el("span", { class: `pill confirmed ${animate ? "pop" : ""}` }, icon("check"), "확정");
+    return el("span", { class: `badge confirmed ${animate ? "pop" : ""}` }, icon("check"), "확정");
   }
-  if (job.status === "done") return el("span", { class: "pill draft", text: "초안" });
-  if (job.status === "failed") return el("span", { class: "pill failed", text: "실패" });
-  if (job.status === "canceled") return el("span", { class: "pill", text: "중지됨" });
-  if (job.status === "queued") return el("span", { class: "pill", text: "대기 중" });
-  return el("span", { class: "pill", text: "처리 중" });
+  if (job.status === "done") return el("span", { class: "badge draft", text: "초안" });
+  if (job.status === "failed") return el("span", { class: "badge failed", text: "실패" });
+  if (job.status === "canceled") return el("span", { class: "badge", text: "멈춤" });
+  if (job.status === "queued") return el("span", { class: "badge", text: "대기" });
+  return el("span", { class: "badge working", text: "처리 중" });
 }
 
-function topbar() {
-  return el(
-    "header",
-    { class: "topbar" },
-    el(
-      "a",
-      { class: "brand", href: "#/" },
-      el("img", { src: "/static/favicon.svg", alt: "" }),
-      "회의록",
-    ),
-  );
+function topbar({ back = false, right = null } = {}) {
+  const left = back
+    ? el("a", { class: "icon-button", href: "#/", "aria-label": "목록으로" }, icon("back"))
+    : el("a", { class: "brand", href: "#/" }, el("img", { src: "/static/favicon.svg", alt: "" }), "회의록");
+  return el("header", { class: "topbar" }, left, right);
 }
 
-function setScreen(wide = false) {
+function setScreen({ wide = false, back = false, right = null } = {}) {
   clearTimeout(pollTimer);
   if (cleanup) cleanup();
   cleanup = null;
   unsaved = false;
   const page = el("main", { class: wide ? "page wide" : "page" });
-  root.replaceChildren(topbar(), page);
+  root.replaceChildren(topbar({ back, right }), page);
   window.scrollTo(0, 0);
   return page;
 }
 
-async function deleteJob(job, alert) {
-  const message = "이 회의록을 삭제할까요? 녹음, 전사문, 회의록이 모두 지워지고 되돌릴 수 없습니다.";
-  if (!window.confirm(message)) return;
+async function deleteJob(job) {
+  const agreed = await confirmSheet({
+    title: "이 회의록을 삭제할까요?",
+    body: "녹음과 전사문도 함께 지워지고, 되돌릴 수 없어요.",
+    action: "삭제",
+    danger: true,
+  });
+  if (!agreed) return;
   try {
     await api(`/api/jobs/${job.id}`, { method: "DELETE" });
+    toast("삭제했어요");
     location.hash = "#/";
   } catch (error) {
-    alert.textContent = error.message;
+    toast(error.message, true);
   }
 }
 
 /* 목록 */
 
 function uploadSection(onUploaded) {
-  const alert = el("p", { class: "alert", role: "alert" });
-  const status = el("div", { class: "upload-progress", "aria-live": "polite" });
+  const meterBox = el("div", { class: "upload-meter" });
   const input = el("input", { type: "file", accept: ACCEPT, id: "audio-file" });
-  const label = el("label", { class: "upload-button", for: "audio-file" }, icon("upload"), "녹음 올리기");
+  const labelText = el("span", { text: "녹음 올리기" });
+  const label = el("label", { class: "upload-button", for: "audio-file" }, icon("upload"), labelText);
 
   input.addEventListener("change", () => {
     const file = input.files[0];
     if (!file) return;
-    alert.textContent = "";
     input.disabled = true;
     label.setAttribute("aria-disabled", "true");
-    const progressText = el("span", { text: `${file.name} 올리는 중` });
+    labelText.textContent = "올리는 중";
     const fill = el("div", { class: "meter-fill" });
     fill.style.width = "0%";
-    status.replaceChildren(progressText, el("div", { class: "meter" }, fill));
+    meterBox.replaceChildren(el("div", { class: "meter" }, fill));
 
     const finish = () => {
       input.disabled = false;
       input.value = "";
       label.removeAttribute("aria-disabled");
-      status.replaceChildren();
+      labelText.textContent = "녹음 올리기";
+      meterBox.replaceChildren();
     };
 
     const request = new XMLHttpRequest();
@@ -228,58 +276,44 @@ function uploadSection(onUploaded) {
       if (!event.lengthComputable) return;
       const percent = Math.round((event.loaded / event.total) * 100);
       fill.style.width = `${percent}%`;
-      progressText.textContent =
-        percent < 100 ? `${file.name} 올리는 중 (${percent}%)` : `${file.name} 확인하는 중`;
+      labelText.textContent = percent < 100 ? `올리는 중 ${percent}%` : "파일을 확인하는 중";
     });
     request.addEventListener("load", () => {
       finish();
       if (request.status === 201) {
+        toast("올렸어요. 다 되면 여기에 나타나요");
         onUploaded();
       } else {
         const detail = request.response && request.response.detail;
-        alert.textContent = typeof detail === "string" ? detail : "파일을 올리지 못했습니다. 다시 시도하세요.";
+        toast(typeof detail === "string" ? detail : "파일을 올리지 못했어요. 다시 시도해 주세요.", true);
       }
     });
     request.addEventListener("error", () => {
       finish();
-      alert.textContent = "연결이 끊겨 파일을 올리지 못했습니다. 노트북이 켜져 있는지 확인하고 다시 시도하세요.";
+      toast("연결이 끊겼어요. 노트북이 켜져 있는지 확인해 주세요.", true);
     });
     const form = new FormData();
     form.append("file", file);
     request.send(form);
   });
 
-  return el(
-    "div",
-    { class: "upload" },
-    input,
-    label,
-    el("p", {
-      class: "upload-hint",
-      text: "1GB 이하의 녹음 파일을 올립니다. 아이폰 음성 메모는 공유 메뉴에서 파일에 저장한 뒤 고르세요.",
-    }),
-    status,
-    alert,
-  );
+  return el("div", { class: "upload" }, input, el("div", { class: "upload-bar" }, meterBox, label));
 }
 
-function noteCard(job) {
+function noteRow(job) {
   const body = el(
     "div",
     {},
-    el("span", { class: "note-title", text: job.title || job.name }),
-    metaRow(job),
+    el("span", { class: "note-title", text: displayName(job) }),
+    el("span", { class: "meta", text: metaText(job) }),
   );
   if (isWorking(job)) body.append(meter(progress(job)));
   if (job.status !== "done") {
-    body.append(
-      el("div", {
-        class: `note-state ${job.status === "failed" ? "failed" : ""}`,
-        text: stateText(job),
-      }),
-    );
+    const summary = [headline(job), detailText(job)].filter(Boolean).join(", ");
+    const tone = job.status === "failed" ? "failed" : job.status === "canceled" ? "quiet" : "";
+    body.append(el("div", { class: `note-state ${tone}`, text: job.status === "failed" ? headline(job) : summary }));
   }
-  return el("li", {}, el("a", { class: "note-card", href: `#/jobs/${job.id}` }, body, statusPill(job)));
+  return el("li", {}, el("a", { class: "note-row", href: `#/jobs/${job.id}` }, body, badge(job), icon("next")));
 }
 
 async function renderList() {
@@ -299,18 +333,24 @@ async function renderList() {
     const ordered = [...jobs.filter(isActive), ...jobs.filter((job) => !isActive(job))];
     list.replaceChildren(
       el("h2", { class: "section-title", text: "내 회의록" }),
-      ordered.length
-        ? el("ul", { class: "note-list" }, ...ordered.map(noteCard))
-        : el("p", { class: "empty", text: "아직 회의록이 없습니다. 첫 녹음을 올리세요." }),
+      el(
+        "div",
+        { class: "card" },
+        ordered.length
+          ? el("ul", { class: "note-list" }, ...ordered.map(noteRow))
+          : el("p", { class: "empty", text: "아직 회의록이 없어요. 첫 녹음을 올려 보세요." }),
+      ),
+      el("p", { class: "hint", text: "아이폰 음성 메모는 공유 메뉴에서 '파일에 저장'한 뒤 고르면 돼요." }),
     );
     if (jobs.some(isActive)) pollTimer = setTimeout(refresh, POLL_MS);
   };
+  const title = el("h1", {}, "녹음만 올리면", el("br"), "회의록이 완성돼요");
   page.append(
     el(
       "section",
       { class: "hero" },
-      el("h1", { text: "회의가 끝나면, 녹음만 올리세요" }),
-      el("p", { text: "말을 글로 옮기고 화자를 나눠 회의록 초안까지 만듭니다." }),
+      title,
+      el("p", { text: "누가 무슨 말을 했는지 정리해 초안까지 만들어 드려요." }),
       uploadSection(refresh),
     ),
     list,
@@ -375,26 +415,29 @@ function renderTable(lines, onTime) {
 function renderNotes(markdown, onTime) {
   const container = el("article", { class: "notes" });
   const lines = markdown.split("\n");
-  let parent = container;
+  let parent = null;
   let list = null;
+  const section = (extra = "") => {
+    parent = el("section", { class: `card ${extra}` });
+    container.append(parent);
+    return parent;
+  };
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const trimmed = line.trim();
+    const trimmed = lines[index].trim();
     if (!trimmed.startsWith("- ")) list = null;
-    if (!trimmed) continue;
-    if (trimmed.startsWith("# ")) continue;
+    if (!trimmed || trimmed.startsWith("# ")) continue;
     if (trimmed.startsWith("## ")) {
       const heading = trimmed.slice(3);
-      const isCheck = heading.startsWith("확인 필요");
-      parent = isCheck ? el("section", { class: "check" }) : container;
-      if (isCheck) container.append(parent);
-      parent.append(el("h2", { text: heading }));
-    } else if (trimmed.startsWith("### ")) {
-      parent.append(el("h3", { text: trimmed.slice(4) }));
+      section(heading.startsWith("확인 필요") ? "check" : "").append(el("h2", { text: heading }));
+      continue;
+    }
+    const target = parent || section();
+    if (trimmed.startsWith("### ")) {
+      target.append(el("h3", { text: trimmed.slice(4) }));
     } else if (trimmed.startsWith("- ")) {
       if (!list) {
         list = el("ul");
-        parent.append(list);
+        target.append(list);
       }
       list.append(el("li", {}, ...inline(trimmed.slice(2), onTime)));
     } else if (trimmed.startsWith("|")) {
@@ -404,9 +447,9 @@ function renderNotes(markdown, onTime) {
         index += 1;
       }
       index -= 1;
-      parent.append(renderTable(tableLines, onTime));
+      target.append(renderTable(tableLines, onTime));
     } else {
-      parent.append(el("p", {}, ...inline(trimmed, onTime)));
+      target.append(el("p", {}, ...inline(trimmed, onTime)));
     }
   }
   return container;
@@ -420,15 +463,30 @@ function speakerStats(turns, duration) {
     totals.set(turn.speaker, (totals.get(turn.speaker) || 0) + (turn.end - turn.start));
   }
   const sum = [...totals.values()].reduce((a, b) => a + b, 0) || duration || 1;
+  let rank = 0;
   return [...totals.entries()]
     .sort((a, b) => b[1] - a[1])
-    .map(([speaker, seconds], index) => ({ speaker, share: Math.round((seconds / sum) * 100), index: index % 6 }));
+    .map(([speaker, seconds]) => {
+      const known = speaker !== "UNKNOWN";
+      if (known) rank += 1;
+      return {
+        speaker,
+        known,
+        name: known ? `화자 ${rank}` : "알 수 없음",
+        share: Math.round((seconds / sum) * 100),
+        index: known ? (rank - 1) % 6 : 0,
+      };
+    });
 }
 
 function renderRibbon(turns, duration, stats, seek) {
-  const ribbon = el("section", { class: "ribbon", "aria-label": "시간대별 화자" });
+  const ribbon = el(
+    "section",
+    { class: "ribbon card" },
+    el("h2", { text: "누가 얼마나 말했나요" }),
+  );
   const cursors = [];
-  for (const { speaker, share, index } of stats.filter((item) => item.speaker !== "UNKNOWN")) {
+  for (const { speaker, name, share, index } of stats.filter((item) => item.known)) {
     const track = el("div", {
       class: "ribbon-track",
       onclick: (event) => {
@@ -442,7 +500,7 @@ function renderRibbon(turns, duration, stats, seek) {
       block.style.width = `${((turn.end - turn.start) / duration) * 100}%`;
       track.append(block);
     }
-    const cursor = el("span", { class: "ribbon-cursor" });
+    const cursor = el("span", { class: "ribbon-cursor", hidden: true });
     cursor.style.left = "0%";
     cursors.push(cursor);
     track.append(cursor);
@@ -450,7 +508,7 @@ function renderRibbon(turns, duration, stats, seek) {
       el(
         "div",
         { class: `ribbon-row speaker-${index}` },
-        el("div", { class: "ribbon-label" }, `${speaker} `, el("span", { text: `${share}%` })),
+        el("div", { class: "ribbon-label" }, `${name} `, el("span", { text: `${share}%` })),
         track,
       ),
     );
@@ -458,7 +516,10 @@ function renderRibbon(turns, duration, stats, seek) {
   return {
     node: ribbon,
     setTime(time) {
-      for (const cursor of cursors) cursor.style.left = `${(time / duration) * 100}%`;
+      for (const cursor of cursors) {
+        cursor.hidden = false;
+        cursor.style.left = `${(time / duration) * 100}%`;
+      }
     },
   };
 }
@@ -482,11 +543,106 @@ function currentTurnIndex(turns, time) {
   return found;
 }
 
+function renderEditor(job) {
+  const page = setScreen({
+    right: el("button", {
+      class: "text-link",
+      type: "button",
+      text: "취소",
+      onclick: async () => {
+        if (unsaved) {
+          const agreed = await confirmSheet({
+            title: "수정을 그만둘까요?",
+            body: "저장하지 않은 내용은 사라져요.",
+            action: "그만두기",
+            danger: true,
+          });
+          if (!agreed) return;
+        }
+        renderDetail(job);
+      },
+    }),
+  });
+  const area = el("textarea", { "aria-label": "회의록 내용" });
+  area.value = job.notes;
+  area.addEventListener("input", () => {
+    unsaved = area.value !== job.notes;
+  });
+  const save = button("저장하기", {
+    variant: "primary",
+    onclick: async () => {
+      save.disabled = true;
+      try {
+        const updated = await api(`/api/jobs/${job.id}/notes`, jsonOptions("PUT", { notes: area.value }));
+        toast("저장했어요");
+        renderDetail(updated);
+      } catch (error) {
+        toast(error.message, true);
+        save.disabled = false;
+      }
+    },
+  });
+  page.append(
+    el("div", { class: "editor" }, area),
+    el("div", { class: "bottom-bar" }, el("div", { class: "bottom-bar-inner" }, save)),
+  );
+}
+
+function openMoreMenu(job) {
+  openSheet((close) => [
+    el(
+      "div",
+      { class: "sheet-menu" },
+      el(
+        "button",
+        {
+          class: "sheet-item",
+          type: "button",
+          onclick: () => {
+            close();
+            renderEditor(job);
+          },
+        },
+        icon("pencil"),
+        "수정하기",
+      ),
+      el(
+        "a",
+        { class: "sheet-item", href: `/api/jobs/${job.id}/download`, onclick: close },
+        icon("download"),
+        "내려받기",
+      ),
+      el(
+        "button",
+        {
+          class: "sheet-item danger",
+          type: "button",
+          onclick: () => {
+            close();
+            deleteJob(job);
+          },
+        },
+        icon("trash"),
+        "삭제하기",
+      ),
+    ),
+  ]);
+}
+
 function renderDetail(job, { justConfirmed = false } = {}) {
-  const page = setScreen(true);
+  const page = setScreen({
+    wide: true,
+    back: true,
+    right: el(
+      "button",
+      { class: "icon-button", type: "button", "aria-label": "더보기", onclick: () => openMoreMenu(job) },
+      icon("more"),
+    ),
+  });
   const { turns, duration_seconds: duration } = job;
   const stats = speakerStats(turns, duration);
-  const speakerIndex = new Map(stats.map((item) => [item.speaker, item.index]));
+  const speakers = new Map(stats.map((item) => [item.speaker, item]));
+  const friendly = (text) => text.replace(/SPEAKER_\d+/g, (label) => speakers.get(label)?.name || label);
 
   const audio = el("audio", { src: `/api/jobs/${job.id}/audio`, preload: "metadata" });
   const play = playIcon();
@@ -501,19 +657,16 @@ function renderDetail(job, { justConfirmed = false } = {}) {
     play.svg,
   );
   const timeLabel = el("span", { class: "dock-time", text: `00:00 / ${clock(duration)}` });
-  const lineLabel = el("span", {
-    class: "dock-line",
-    text: "시각을 누르면 그 부분부터 들을 수 있습니다.",
-  });
+  const lineLabel = el("span", { class: "dock-line", text: "시각을 누르면 들을 수 있어요" });
 
-  const lineNodes = turns.map((turn, index) => {
-    const speakerClass = `speaker-${speakerIndex.get(turn.speaker)}`;
+  const lineNodes = turns.map((turn) => {
+    const speaker = speakers.get(turn.speaker);
     return el(
       "li",
-      { "data-index": index },
+      {},
       el(
         "div",
-        { class: `transcript-head ${speakerClass}` },
+        { class: `transcript-head speaker-${speaker.index}` },
         el("button", {
           class: "time-ref",
           type: "button",
@@ -521,7 +674,7 @@ function renderDetail(job, { justConfirmed = false } = {}) {
           "aria-label": `${clock(turn.start)}부터 듣기`,
           onclick: () => seek(turn.start),
         }),
-        turn.speaker,
+        speaker.name,
       ),
       turn.text,
     );
@@ -537,7 +690,7 @@ function renderDetail(job, { justConfirmed = false } = {}) {
     if (index < 0) return;
     const turn = turns[index];
     lineNodes[index].classList.add("current");
-    lineLabel.textContent = `${turn.speaker}: ${turn.text}`;
+    lineLabel.textContent = `${speakers.get(turn.speaker).name}: ${turn.text}`;
     if (scroll && transcript.offsetParent && transcript.scrollHeight > transcript.clientHeight) {
       const offset = lineNodes[index].offsetTop - transcript.offsetTop - transcript.clientHeight / 3;
       transcript.scrollTo({ top: offset, behavior: reducedMotion.matches ? "auto" : "smooth" });
@@ -567,8 +720,8 @@ function renderDetail(job, { justConfirmed = false } = {}) {
   });
   cleanup = () => audio.pause();
 
-  const notesPane = el("div", {}, renderNotes(job.notes, seek));
-  const transcriptPane = el("div", { class: "transcript-panel" }, transcript);
+  const notesPane = el("div", {}, renderNotes(friendly(job.notes), seek));
+  const transcriptPane = el("div", { class: "card" }, transcript);
 
   const notesTab = el("button", { type: "button", role: "tab", "aria-selected": "true", text: "회의록" });
   const transcriptTab = el("button", { type: "button", role: "tab", "aria-selected": "false", text: "전사문" });
@@ -582,136 +735,114 @@ function renderDetail(job, { justConfirmed = false } = {}) {
   transcriptTab.addEventListener("click", () => selectTab(false));
   selectTab(true);
 
-  const alert = el("p", { class: "alert", role: "alert" });
-
-  const startEditing = () => {
-    const area = el("textarea", { "aria-label": "회의록 내용" });
-    area.value = job.notes;
-    area.addEventListener("input", () => {
-      unsaved = area.value !== job.notes;
-    });
-    const save = button("저장", {
-      variant: "primary",
-      onclick: async () => {
-        save.disabled = true;
-        try {
-          const updated = await api(`/api/jobs/${job.id}/notes`, jsonOptions("PUT", { notes: area.value }));
-          renderDetail(updated);
-        } catch (error) {
-          alert.textContent = error.message;
-          save.disabled = false;
-        }
-      },
-    });
-    const cancel = button("취소", {
-      onclick: () => {
-        if (unsaved && !window.confirm("저장하지 않은 수정 내용을 버릴까요?")) return;
-        renderDetail(job);
-      },
-    });
-    selectTab(true);
-    notesPane.replaceChildren(
-      el("div", { class: "editor" }, area, el("div", { class: "editor-actions" }, save, cancel)),
-    );
-    actions.hidden = true;
-    backLink.hidden = true;
-    area.focus();
-  };
-
-  const confirmButton = button(job.confirmed_at ? "확정됨" : "확정하기", {
-    iconName: "check",
-    variant: "primary",
-    disabled: Boolean(job.confirmed_at),
-    onclick: async () => {
-      confirmButton.disabled = true;
-      try {
-        const updated = await api(`/api/jobs/${job.id}/confirm`, { method: "POST" });
-        renderDetail(updated, { justConfirmed: true });
-      } catch (error) {
-        alert.textContent = error.message;
-        confirmButton.disabled = false;
-      }
-    },
-  });
-
-  const actions = el(
-    "div",
-    { class: "actions" },
-    confirmButton,
-    button("수정", { iconName: "pencil", onclick: startEditing }),
-    el(
-      "a",
-      { class: "button", href: `/api/jobs/${job.id}/download` },
-      icon("download"),
-      "내려받기",
-    ),
-    button("삭제", { iconName: "trash", variant: "danger", onclick: () => deleteJob(job, alert) }),
-  );
-
-  const backLink = el("a", { class: "back", href: "#/" }, icon("back"), "목록으로");
+  const confirmButton = job.confirmed_at
+    ? button("확정됨", { variant: "done", disabled: true, iconName: "check" })
+    : button("확정하기", {
+        variant: "primary",
+        onclick: async () => {
+          confirmButton.disabled = true;
+          try {
+            const updated = await api(`/api/jobs/${job.id}/confirm`, { method: "POST" });
+            toast("회의록을 확정했어요");
+            renderDetail(updated, { justConfirmed: true });
+          } catch (error) {
+            toast(error.message, true);
+            confirmButton.disabled = false;
+          }
+        },
+      });
 
   page.append(
-    backLink,
     el(
       "header",
       { class: "doc-head" },
-      el("h1", { text: job.title || job.name }),
-      metaRow(job, statusPill(job, justConfirmed), job.edited ? el("span", { text: "수정함" }) : null),
+      badge(job, justConfirmed),
+      el("h1", { text: friendly(displayName(job)) }),
+      el("span", { class: "meta", text: `${metaText(job)}${job.edited ? ", 수정함" : ""}` }),
     ),
-    actions,
-    alert,
     ribbon.node,
     el("div", { class: "tabs", role: "tablist" }, notesTab, transcriptTab),
     el("div", { class: "panes" }, notesPane, transcriptPane),
     audio,
-    el("div", { class: "dock" }, playButton, timeLabel, lineLabel),
+    el(
+      "div",
+      { class: "dock" },
+      playButton,
+      el("div", { class: "dock-text" }, timeLabel, lineLabel),
+      confirmButton,
+    ),
+  );
+}
+
+function statusMark(job) {
+  if (job.status === "failed") return el("div", { class: "status-mark failed" }, icon("alert"));
+  if (job.status === "canceled") return el("div", { class: "status-mark stopped" }, icon("stop"));
+  return el(
+    "div",
+    { class: "status-mark" },
+    el("div", { class: "wave", "aria-hidden": "true" }, el("i"), el("i"), el("i"), el("i"), el("i")),
   );
 }
 
 function renderWaiting(job) {
-  const page = setScreen();
-  const alert = el("p", { class: "alert", role: "alert" });
-  const card = el(
+  const page = setScreen({ back: true });
+  const title = el("h1", { text: headline(job) });
+  const state = el("p", { class: "state", "aria-live": "polite", text: detailText(job) });
+  const meterBox = el("div", {}, isWorking(job) ? meter(progress(job)) : null);
+  const content = el(
     "div",
     { class: "waiting" },
-    el("h1", { text: job.name }),
-    metaRow(job, statusPill(job)),
+    statusMark(job),
+    title,
+    state,
+    meterBox,
+    el("p", { class: "file", text: `${displayName(job)}, ${spanOfTime(job.duration_seconds)} 녹음` }),
   );
-  const buttons = el("div", { class: "actions" });
+  const bar = el("div", { class: "bottom-bar-inner" });
 
   if (isActive(job)) {
-    if (isWorking(job)) card.append(meter(progress(job)));
-    card.append(
-      el("p", { class: "state", "aria-live": "polite", text: stateText(job) }),
-      el("p", { class: "note", text: "이 화면을 닫아도 처리는 계속됩니다. 끝날 때까지 노트북을 켜 두세요." }),
-    );
-    const stop = button("처리 중지", {
-      iconName: "stop",
+    content.append(el("p", { class: "note", text: "이 화면을 닫아도 괜찮아요. 끝날 때까지 노트북만 켜 두세요." }));
+    const stop = button("처리 멈추기", {
       onclick: async () => {
-        if (!window.confirm("처리를 중지할까요? 진행 중인 전사는 사라지고, 다시 시작하면 처음부터 합니다.")) return;
+        const agreed = await confirmSheet({
+          title: "처리를 멈출까요?",
+          body: "지금까지 옮긴 내용은 사라지고, 다시 시작하면 처음부터 해요.",
+          action: "멈추기",
+          danger: true,
+        });
+        if (!agreed) return;
         stop.disabled = true;
         try {
           await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
           route();
         } catch (error) {
-          alert.textContent = error.message;
+          toast(error.message, true);
           stop.disabled = false;
         }
       },
     });
-    buttons.append(stop);
-    pollTimer = setTimeout(route, POLL_MS);
+    bar.append(stop);
+
+    const refresh = async () => {
+      let latest;
+      try {
+        latest = await api(`/api/jobs/${job.id}`);
+      } catch (error) {
+        pollTimer = setTimeout(refresh, POLL_MS);
+        return;
+      }
+      if (latest.status !== job.status) {
+        route();
+        return;
+      }
+      title.textContent = headline(latest);
+      state.textContent = detailText(latest);
+      meterBox.replaceChildren(...(isWorking(latest) ? [meter(progress(latest))] : []));
+      pollTimer = setTimeout(refresh, POLL_MS);
+    };
+    pollTimer = setTimeout(refresh, POLL_MS);
   } else {
-    card.append(
-      el("p", {
-        class: `state ${job.status === "failed" ? "alert" : ""}`,
-        role: job.status === "failed" ? "alert" : null,
-        text: stateText(job),
-      }),
-      el("p", { class: "note", text: `다시 시작하면 전사에 약 ${spanOfTime(job.estimated_seconds)} 걸립니다.` }),
-    );
     const restart = button("다시 시작", {
-      iconName: "restart",
       variant: "primary",
       onclick: async () => {
         restart.disabled = true;
@@ -719,33 +850,26 @@ function renderWaiting(job) {
           await api(`/api/jobs/${job.id}/retry`, { method: "POST" });
           route();
         } catch (error) {
-          alert.textContent = error.message;
+          toast(error.message, true);
           restart.disabled = false;
         }
       },
     });
-    buttons.append(
-      restart,
-      button("삭제", { iconName: "trash", variant: "danger", onclick: () => deleteJob(job, alert) }),
-    );
+    bar.append(button("삭제", { onclick: () => deleteJob(job) }), restart);
   }
 
-  card.append(buttons, alert);
-  page.append(
-    el("div", { class: "page-center" }, el("a", { class: "back", href: "#/" }, icon("back"), "목록으로"), card),
-  );
+  page.append(content, el("div", { class: "bottom-bar" }, bar));
 }
 
 /* 화면 전환 */
 
 function showError(message) {
-  const page = setScreen();
-  page.append(
-    el("div", { class: "page-center" }, el("a", { class: "back", href: "#/" }, icon("back"), "목록으로"), el("p", { class: "alert", role: "alert", text: message })),
-  );
+  const page = setScreen({ back: true });
+  page.append(el("p", { class: "page-message", role: "alert", text: message }));
 }
 
 async function route() {
+  document.querySelectorAll("dialog.sheet").forEach((sheet) => sheet.close());
   const match = location.hash.match(/^#\/jobs\/([0-9a-f]{32})$/);
   try {
     if (!match) {
@@ -759,7 +883,7 @@ async function route() {
     if (error instanceof ApiError) {
       showError(error.message);
     } else {
-      showError("노트북에 연결할 수 없습니다. 노트북과 Tailscale이 켜져 있는지 확인한 뒤 새로고침하세요.");
+      showError("노트북에 연결할 수 없어요. 노트북과 Tailscale이 켜져 있는지 확인한 뒤 새로고침해 주세요.");
     }
   }
 }

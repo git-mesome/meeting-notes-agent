@@ -30,8 +30,8 @@ logger = logging.getLogger("meeting_notes.app")
 STATIC_DIR = Path(__file__).parent / "static"
 ALLOWED_SUFFIXES = {".m4a", ".mp3", ".wav", ".flac", ".ogg", ".aac", ".mp4", ".webm"}
 MAX_UPLOAD_BYTES = 1024**3
-TOO_LARGE_MESSAGE = "파일이 너무 큽니다. 1GB 이하로 올리세요."
-STILL_STOPPING_MESSAGE = "중지를 마무리하고 있습니다. 잠시 후 다시 시도하세요."
+TOO_LARGE_MESSAGE = "파일이 너무 커요. 1GB 이하로 올려 주세요."
+STILL_STOPPING_MESSAGE = "아직 멈추는 중이에요. 잠시 후 다시 시도해 주세요."
 # 파일 이름 없이 본문으로 올라올 때 쓴다. 내용은 ffprobe로 따로 확인한다.
 RAW_SUFFIXES = {
     "audio/mpeg": ".mp3",
@@ -52,8 +52,8 @@ ACTIVE_STATUSES = ("queued", "transcribing", "writing")
 SECONDS_PER_AUDIO_SECOND = 2.5
 
 FAILURE_MESSAGES = {
-    "transcribing": "음성을 글로 옮기지 못했습니다. 다시 시도하세요.",
-    "writing": "회의록을 쓰지 못했습니다. 다시 시도하면 전사문은 그대로 두고 회의록만 다시 씁니다.",
+    "transcribing": "음성을 글로 옮기지 못했어요. 다시 시도해 주세요.",
+    "writing": "회의록을 쓰지 못했어요. 다시 시작하면 전사는 건너뛰고 회의록만 다시 써요.",
 }
 
 SECURITY_HEADERS = {
@@ -88,7 +88,7 @@ def probe_duration(audio):
             raise ValueError
         duration = float(info["format"]["duration"])
     except (json.JSONDecodeError, KeyError, ValueError) as error:
-        raise HTTPException(400, "오디오를 읽을 수 없는 파일입니다. 녹음 파일을 다시 올리세요.") from error
+        raise HTTPException(400, "오디오를 읽을 수 없는 파일이에요. 녹음 파일을 다시 올려 주세요.") from error
     return duration
 
 
@@ -282,7 +282,7 @@ def create_app(data_dir="jobs", process=default_process):
         # 다른 웹사이트가 브라우저를 통해 보내는 쓰기 요청을 본문을 읽기 전에 막는다.
         origin = request.headers.get("origin")
         if request.method not in READ_ONLY_METHODS and origin and urlsplit(origin).netloc != request.headers.get("host"):
-            return JSONResponse({"detail": "다른 사이트에서 보낸 요청은 처리하지 않습니다."}, status_code=403)
+            return JSONResponse({"detail": "다른 사이트에서 보낸 요청은 처리하지 않아요."}, status_code=403)
         path = request.url.path
         response = await call_next(request)
         response.headers.update(SECURITY_HEADERS)
@@ -293,12 +293,12 @@ def create_app(data_dir="jobs", process=default_process):
     def get_job(job_id):
         job = store.read(job_id)
         if job is None:
-            raise HTTPException(404, "회의록을 찾을 수 없습니다.")
+            raise HTTPException(404, "회의록을 찾을 수 없어요.")
         return job
 
     def require_done(job):
         if job["status"] != "done":
-            raise HTTPException(409, "아직 회의록이 완성되지 않았습니다.")
+            raise HTTPException(409, "아직 회의록이 완성되지 않았어요.")
 
     @app.get("/api/jobs")
     def list_jobs():
@@ -336,12 +336,12 @@ def create_app(data_dir="jobs", process=default_process):
                 async with request.form() as form:
                     upload = next((value for value in form.values() if isinstance(value, UploadFile)), None)
                     if upload is None:
-                        raise HTTPException(400, "파일이 들어 있지 않습니다. 녹음 파일을 올리세요.")
+                        raise HTTPException(400, "파일이 들어 있지 않아요. 녹음 파일을 올려 주세요.")
                     name = Path(upload.filename or "녹음").name[:200]
                     suffix = Path(name).suffix.lower()
                     if suffix not in ALLOWED_SUFFIXES:
                         allowed = ", ".join(sorted(s[1:] for s in ALLOWED_SUFFIXES))
-                        raise HTTPException(400, f"올릴 수 없는 파일 형식입니다. {allowed} 파일을 올리세요.")
+                        raise HTTPException(400, f"올릴 수 없는 파일 형식이에요. {allowed} 파일을 올려 주세요.")
                     await run_in_threadpool(copy_upload, upload.file, incoming)
             else:
                 suffix = RAW_SUFFIXES.get(content_type, ".m4a")
@@ -394,7 +394,7 @@ def create_app(data_dir="jobs", process=default_process):
     def retry(job_id: str):
         job = get_job(job_id)
         if job["status"] not in ("failed", "canceled"):
-            raise HTTPException(409, "실패하거나 중지한 작업만 다시 시작할 수 있습니다.")
+            raise HTTPException(409, "실패하거나 멈춘 작업만 다시 시작할 수 있어요.")
         if worker.is_running(job_id):
             raise HTTPException(409, STILL_STOPPING_MESSAGE)
         store.update(job_id, status="queued", error=None)
@@ -405,7 +405,7 @@ def create_app(data_dir="jobs", process=default_process):
     def cancel(job_id: str):
         job = get_job(job_id)
         if job["status"] not in ACTIVE_STATUSES:
-            raise HTTPException(409, "처리 중인 작업만 중지할 수 있습니다.")
+            raise HTTPException(409, "처리 중인 작업만 멈출 수 있어요.")
         worker.cancel(job_id)
         return read_job(job_id)
 
@@ -413,7 +413,7 @@ def create_app(data_dir="jobs", process=default_process):
     def delete_job(job_id: str):
         job = get_job(job_id)
         if job["status"] in ACTIVE_STATUSES:
-            raise HTTPException(409, "처리 중인 회의록은 먼저 중지하세요.")
+            raise HTTPException(409, "처리 중인 회의록은 먼저 멈춰 주세요.")
         if worker.is_running(job_id):
             raise HTTPException(409, STILL_STOPPING_MESSAGE)
         shutil.rmtree(store.path(job_id))

@@ -126,7 +126,7 @@ def test_accepts_form_with_other_field_name(client, tone):
 def test_rejects_form_without_file(client, tmp_path):
     response = client.post("/api/jobs", files={"file": (None, "글자")})
     assert response.status_code == 400
-    assert "파일이 들어 있지 않습니다" in response.json()["detail"]
+    assert "파일이 들어 있지 않아요" in response.json()["detail"]
     assert list(tmp_path.iterdir()) == []
 
 
@@ -220,7 +220,7 @@ def test_failure_can_be_retried_without_exposing_details(tmp_path, tone):
     with make_client(tmp_path, flaky) as test_client:
         job_id = upload(test_client, tone)
         failed = wait_for(test_client, job_id, "failed")
-        assert "회의록을 쓰지 못했습니다" in failed["error"]
+        assert "회의록을 쓰지 못했어요" in failed["error"]
         assert "비밀" not in json.dumps(failed, ensure_ascii=False)
         assert test_client.post(f"/api/jobs/{job_id}/retry").status_code == 200
         assert wait_for(test_client, job_id, "done")["error"] is None
@@ -349,7 +349,7 @@ def test_delete_refused_while_processing(tmp_path, tone):
         assert started.wait(5)
         response = test_client.delete(f"/api/jobs/{job_id}")
         assert response.status_code == 409
-        assert "먼저 중지" in response.json()["detail"]
+        assert "먼저 멈춰" in response.json()["detail"]
         assert (tmp_path / job_id).exists()
         test_client.post(f"/api/jobs/{job_id}/cancel")
         processes[0].wait(5)
