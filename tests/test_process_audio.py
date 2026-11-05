@@ -79,6 +79,58 @@ def test_failed_transcription_reports_process_and_removes_partial_result(tmp_pat
     assert not (tmp_path / "audio.json").exists()
 
 
+def write_knowledge(root):
+    (root / "meeting_context.md").write_text("# 배경\n- 홍길순 부장: 영업\n", encoding="utf-8")
+    terms = [
+        {"term": "방화벽", "term_en": "firewall", "aliases": ["FW"], "definition": "가" * 500, "tags": []},
+        {"term": "토폴로지", "term_en": None, "aliases": [], "definition": "연결 구조다.", "tags": []},
+        {"term": "동기화", "term_en": "sync", "aliases": [], "definition": "장비 값을 모은다.", "tags": []},
+    ]
+    (root / "terms.json").write_text(json.dumps(terms, ensure_ascii=False), encoding="utf-8")
+
+
+def test_knowledge_lists_all_terms_and_defines_only_spoken_ones(tmp_path):
+    write_knowledge(tmp_path)
+    text = meeting_notes.load_knowledge("[00:01] SPEAKER_00: 방 화벽 정책과 SYNC 결과를 봅시다.", tmp_path)
+    assert "홍길순 부장" in text
+    assert "방화벽(firewall, FW)" in text and "토폴로지" in text
+    defined = text.split("이 회의에 나온 용어의 뜻")[1]
+    assert "- 방화벽: " in defined and "- 동기화: 장비 값을 모은다." in defined
+    assert "토폴로지" not in defined
+    assert "가" * (meeting_notes.MAX_DEFINITION_CHARS + 1) not in defined
+
+
+def test_knowledge_is_empty_without_files(tmp_path):
+    assert meeting_notes.load_knowledge("전사문", tmp_path) == ""
+
+
+def test_write_notes_sends_knowledge_before_transcript(tmp_path, monkeypatch):
+    write_knowledge(tmp_path)
+    monkeypatch.setattr(meeting_notes, "KNOWLEDGE_DIR", tmp_path)
+    captured = {}
+
+    class Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def get_final_message(self):
+            return SimpleNamespace(
+                stop_reason="end_turn", content=[SimpleNamespace(type="text", text="회의록")], usage=None
+            )
+
+    class Client:
+        beta = SimpleNamespace(messages=SimpleNamespace(stream=lambda **kwargs: captured.update(kwargs) or Stream()))
+
+    monkeypatch.setattr(meeting_notes.anthropic, "Anthropic", Client)
+    meeting_notes.write_notes("전사문 내용", ["용어"])
+    user = captured["messages"][0]["content"]
+    assert user.index("<company_knowledge>") < user.index("<glossary>") < user.index("<transcript>")
+    assert "표기를 바로잡고" in captured["system"]
+
+
 def test_load_glossary_ignores_blank_lines(tmp_path):
     path = tmp_path / "glossary.txt"
     path.write_text("방화벽\n\n  지점망  \n", encoding="utf-8")
