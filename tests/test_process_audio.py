@@ -79,6 +79,60 @@ def test_failed_transcription_reports_process_and_removes_partial_result(tmp_pat
     assert not (tmp_path / "audio.json").exists()
 
 
+def fake_whisperx(tmp_path, monkeypatch, exit_code=0):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "whisperx"
+    fake.write_text(
+        '#!/bin/sh\n'
+        'echo "$@" > "$(dirname "$1")/args.txt"\n'
+        'name=$(basename "$1"); name="${name%.*}"\n'
+        'echo "{}" > "$(dirname "$1")/$name.json"\n'
+        f"exit {exit_code}\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+
+
+def test_transcribe_uses_normalized_audio_and_cleans_up(tmp_path, monkeypatch):
+    fake_whisperx(tmp_path, monkeypatch)
+    audio = tmp_path / "audio.m4a"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", str(audio)],
+        check=True,
+    )
+    meeting_notes.transcribe(audio, tmp_path, [])
+    args = (tmp_path / "args.txt").read_text(encoding="utf-8")
+    assert "audio.normalized.wav" in args and "--vad_onset 0.2" in args and "--speaker_embeddings" in args
+    assert (tmp_path / "audio.json").exists()
+    assert not (tmp_path / "audio.normalized.wav").exists()
+    assert not (tmp_path / "audio.normalized.json").exists()
+    assert audio.exists()
+
+
+def test_transcribe_falls_back_to_original_when_normalizing_fails(tmp_path, monkeypatch):
+    fake_whisperx(tmp_path, monkeypatch)
+    audio = tmp_path / "audio.m4a"
+    audio.write_bytes(b"not audio")
+    meeting_notes.transcribe(audio, tmp_path, [])
+    assert str(audio) in (tmp_path / "args.txt").read_text(encoding="utf-8")
+    assert (tmp_path / "audio.json").exists()
+
+
+def test_failed_transcription_removes_temporary_files(tmp_path, monkeypatch):
+    fake_whisperx(tmp_path, monkeypatch, exit_code=4)
+    audio = tmp_path / "audio.m4a"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", str(audio)],
+        check=True,
+    )
+    with pytest.raises(subprocess.CalledProcessError):
+        meeting_notes.transcribe(audio, tmp_path, [])
+    leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith("audio.") and p.name != "audio.m4a"]
+    assert leftovers == []
+
+
 def write_knowledge(root):
     (root / "meeting_context.md").write_text("# 배경\n- 홍길순 부장: 영업\n", encoding="utf-8")
     terms = [
@@ -129,6 +183,7 @@ def test_write_notes_sends_knowledge_before_transcript(tmp_path, monkeypatch):
     user = captured["messages"][0]["content"]
     assert user.index("<company_knowledge>") < user.index("<glossary>") < user.index("<transcript>")
     assert "표기를 바로잡고" in captured["system"]
+    assert f"{meeting_notes.MIN_NOTES_CHARS}자 이내" in captured["system"]
 
 
 def test_load_glossary_ignores_blank_lines(tmp_path):

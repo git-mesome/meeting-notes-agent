@@ -632,6 +632,7 @@ function renderNotes(markdown, onTime) {
   const lines = markdown.split("\n");
   let parent = null;
   let list = null;
+  let ordered = null;
   const section = (extra = "") => {
     parent = el("section", { class: `card ${extra}` });
     container.append(parent);
@@ -640,6 +641,7 @@ function renderNotes(markdown, onTime) {
   for (let index = 0; index < lines.length; index += 1) {
     const trimmed = lines[index].trim();
     if (!trimmed.startsWith("- ")) list = null;
+    if (!/^\d+\.\s/.test(trimmed)) ordered = null;
     if (!trimmed || trimmed.startsWith("# ")) continue;
     if (trimmed.startsWith("## ")) {
       const heading = trimmed.slice(3);
@@ -648,7 +650,13 @@ function renderNotes(markdown, onTime) {
     }
     const target = parent || section();
     if (trimmed.startsWith("### ")) {
-      target.append(el("h3", { text: trimmed.slice(4) }));
+      target.append(el("h3", {}, ...inline(trimmed.slice(4), onTime)));
+    } else if (/^\d+\.\s/.test(trimmed)) {
+      if (!ordered) {
+        ordered = el("ol");
+        target.append(ordered);
+      }
+      ordered.append(el("li", {}, ...inline(trimmed.replace(/^\d+\.\s/, ""), onTime)));
     } else if (trimmed.startsWith("- ")) {
       if (!list) {
         list = el("ul");

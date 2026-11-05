@@ -21,8 +21,17 @@ KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
 MAX_TERM_DEFINITIONS = 40
 MAX_DEFINITION_CHARS = 200
 
+# 회의록 길이 상한. 사람이 쓴 회의록은 전사문의 20% 안팎이었다.
+NOTES_LENGTH_RATIO = 0.2
+MIN_NOTES_CHARS = 800
+
 # 무음 구간에서 Whisper가 지어내는 문구. 화자가 잡히지 않았을 때만 제거한다.
-HALLUCINATIONS = {"감사합니다", "시청해주셔서감사합니다"}
+HALLUCINATIONS = {"감사합니다", "수고하셨습니다", "시청해주셔서감사합니다"}
+
+# 마이크 하나로 녹음하면 멀리 앉은 사람의 목소리가 작아 음성 감지에서 버려진다. 음량을 고르고 감지 기준을 낮춘다.
+# 말이 빠졌던 구간에서 전사된 시간이 40초에서 90초로 늘었다.
+NORMALIZE_FILTER = "highpass=f=80,dynaudnorm=f=150:g=15:p=0.95:m=30"
+VAD_OPTIONS = ["--vad_onset", "0.2", "--vad_offset", "0.15"]
 
 ASK_PROMPT = """사내 회의의 전사문과 회의록을 근거로 사용자의 질문에 답한다.
 
@@ -34,27 +43,48 @@ ASK_PROMPT = """사내 회의의 전사문과 회의록을 근거로 사용자�
 - 핵심부터 짧게, 친근한 해요체로 답한다. 표나 제목 없이 문장과 짧은 목록만 쓴다."""
 
 
+def normalize_audio(audio, out_dir):
+    """음량을 고른 임시 파일을 만든다. 만들지 못하면 원본을 그대로 쓴다."""
+    target = out_dir / f"{audio.stem}.normalized.wav"
+    result = subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(audio), "-ac", "1", "-ar", "16000", "-af", NORMALIZE_FILTER, str(target)],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        target.unlink(missing_ok=True)
+        return audio
+    return target
+
+
 def transcribe(audio, out_dir, glossary, on_process=lambda process: None):
     """WhisperX로 전사하고 화자를 구분한다. Hugging Face 토큰은 환경 변수 HF_TOKEN에서 읽는다.
 
     on_process는 실행한 프로세스를 받는다. 호출한 쪽에서 중지할 때 쓴다.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    source = normalize_audio(audio, out_dir)
     cmd = [
-        "whisperx", str(audio),
+        "whisperx", str(source),
         "--model", "large-v3", "--language", "ko",
         "--device", "cpu", "--compute_type", "int8", "--batch_size", "4", "--threads", "8",
-        "--diarize", "--speaker_embeddings", "--verbose", "False",
+        "--diarize", "--speaker_embeddings", "--verbose", "False", *VAD_OPTIONS,
         "--output_dir", str(out_dir), "--output_format", "json",
     ]
     if glossary:
         cmd += ["--hotwords", ", ".join(glossary)]
-    with open(out_dir / "whisperx.log", "w", encoding="utf-8") as log:
-        process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
-        on_process(process)
-        if process.wait() != 0:
-            (out_dir / f"{audio.stem}.json").unlink(missing_ok=True)
-            raise subprocess.CalledProcessError(process.returncode, cmd)
+    result = out_dir / f"{source.stem}.json"
+    try:
+        with open(out_dir / "whisperx.log", "w", encoding="utf-8") as log:
+            process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
+            on_process(process)
+            if process.wait() != 0:
+                result.unlink(missing_ok=True)
+                raise subprocess.CalledProcessError(process.returncode, cmd)
+        if source != audio:
+            result.replace(out_dir / f"{audio.stem}.json")
+    finally:
+        if source != audio:
+            source.unlink(missing_ok=True)
 
 
 def format_time(seconds):
@@ -149,7 +179,7 @@ def write_notes(transcript, glossary, template=DEFAULT_TEMPLATE):
         betas=["server-side-fallback-2026-07-01"],
         fallbacks="default",
         output_config={"effort": "high"},
-        system=system_prompt(template),
+        system=system_prompt(template, max(MIN_NOTES_CHARS, int(len(transcript) * NOTES_LENGTH_RATIO))),
         messages=[{"role": "user", "content": user}],
     ) as stream:
         message = stream.get_final_message()

@@ -692,7 +692,8 @@ svg.icon {
 }
 
 .notes p:last-child,
-.notes ul:last-child {
+.notes ul:last-child,
+.notes ol:last-child {
   margin-bottom: 0;
 }
 
@@ -701,9 +702,14 @@ svg.icon {
   font-weight: 650;
 }
 
-.notes ul {
+.notes ul,
+.notes ol {
   margin: 0 0 0.5rem;
   padding-left: 1.1rem;
+}
+
+.notes ol {
+  padding-left: 1.35rem;
 }
 
 .notes li {
