@@ -180,7 +180,10 @@ function uploadSection(onUploaded) {
     { class: "upload" },
     input,
     label,
-    el("p", { class: "upload-hint", text: "m4a, mp3, wav 등 1GB 이하의 녹음 파일을 올립니다." }),
+    el("p", {
+      class: "upload-hint",
+      text: "1GB 이하의 녹음 파일을 올립니다. 아이폰 음성 메모는 공유 메뉴에서 파일에 저장한 뒤 파일 선택으로 고르세요.",
+    }),
     status,
     alert,
   );
