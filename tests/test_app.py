@@ -5,6 +5,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+import app as app_module
 from app import create_app, notes_title
 
 NOTES = "# 회의록: 예시 회의\n\n## 요약\n- 내용이다. [00:01]\n"
@@ -99,6 +100,54 @@ def test_upload_creates_notes(client, tone):
     assert job["turns"] == TURNS
     assert job["confirmed_at"] is None
     assert job["duration_seconds"] == pytest.approx(1.0, abs=0.2)
+
+
+def test_accepts_raw_body_from_shortcut(client, tone, tmp_path):
+    response = client.post("/api/jobs", content=tone, headers={"Content-Type": "audio/x-m4a"})
+    assert response.status_code == 201
+    job_id = response.json()["id"]
+    assert response.json()["name"] == "아이폰 녹음.m4a"
+    assert wait_for(client, job_id, "done")["title"] == "예시 회의"
+    assert (tmp_path / job_id / "audio.m4a").read_bytes() == tone
+    assert not (tmp_path / job_id / "upload.tmp").exists()
+
+
+def test_raw_body_without_content_type_is_accepted(client, tone):
+    assert client.post("/api/jobs", content=tone, headers={"Content-Type": ""}).status_code == 201
+
+
+def test_accepts_form_with_other_field_name(client, tone):
+    response = client.post("/api/jobs", files={"단축어 입력": ("메모.m4a", tone, "audio/mp4")})
+    assert response.status_code == 201
+    assert response.json()["name"] == "메모.m4a"
+
+
+def test_rejects_form_without_file(client, tmp_path):
+    response = client.post("/api/jobs", files={"file": (None, "글자")})
+    assert response.status_code == 400
+    assert "파일이 들어 있지 않습니다" in response.json()["detail"]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("body", [b"", b"not audio"])
+def test_rejects_raw_body_that_is_not_audio(client, tmp_path, body):
+    response = client.post("/api/jobs", content=body, headers={"Content-Type": "audio/x-m4a"})
+    assert response.status_code == 400
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_rejects_raw_body_over_limit(client, tone, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 5)
+    response = client.post("/api/jobs", content=tone, headers={"Content-Type": "audio/x-m4a"})
+    assert response.status_code == 413
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_rejects_form_upload_over_limit(client, tone, tmp_path, monkeypatch):
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 5)
+    response = client.post("/api/jobs", files={"file": ("a.m4a", tone, "audio/mp4")})
+    assert response.status_code == 413
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_rejects_unsupported_suffix(client, tone, tmp_path):

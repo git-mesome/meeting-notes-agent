@@ -17,10 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 logger = logging.getLogger("meeting_notes.app")
@@ -28,6 +30,17 @@ logger = logging.getLogger("meeting_notes.app")
 STATIC_DIR = Path(__file__).parent / "static"
 ALLOWED_SUFFIXES = {".m4a", ".mp3", ".wav", ".flac", ".ogg", ".aac", ".mp4", ".webm"}
 MAX_UPLOAD_BYTES = 1024**3
+TOO_LARGE_MESSAGE = "파일이 너무 큽니다. 1GB 이하로 올리세요."
+# 파일 이름 없이 본문으로 올라올 때 쓴다. 내용은 ffprobe로 따로 확인한다.
+RAW_SUFFIXES = {
+    "audio/mpeg": ".mp3",
+    "audio/wav": ".wav",
+    "audio/x-wav": ".wav",
+    "audio/flac": ".flac",
+    "audio/ogg": ".ogg",
+    "audio/aac": ".aac",
+    "audio/webm": ".webm",
+}
 # 로그인이 없으므로 서버는 127.0.0.1에만 열고 Tailscale로만 중계한다.
 ALLOWED_HOSTS = ["127.0.0.1", "localhost", "*.ts.net"]
 READ_ONLY_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -86,6 +99,16 @@ def notes_title(notes, fallback):
 def find_audio(job_dir):
     """올린 녹음을 찾는다. WhisperX가 audio.json도 만들므로 확장자까지 확인한다."""
     return next(path for path in job_dir.iterdir() if path.stem == "audio" and path.suffix in ALLOWED_SUFFIXES)
+
+
+def copy_upload(source, target):
+    copied = 0
+    with open(target, "wb") as out:
+        while chunk := source.read(1024 * 1024):
+            copied += len(chunk)
+            if copied > MAX_UPLOAD_BYTES:
+                raise HTTPException(413, TOO_LARGE_MESSAGE)
+            out.write(chunk)
 
 
 def default_process(audio, out_dir, on_stage):
@@ -234,29 +257,11 @@ def create_app(data_dir="jobs", process=default_process):
     def list_jobs():
         return public_jobs(store)
 
-    @app.post("/api/jobs", status_code=201)
-    def create_job(file: UploadFile = File(...)):
-        name = Path(file.filename or "녹음").name[:200]
-        suffix = Path(name).suffix.lower()
-        if suffix not in ALLOWED_SUFFIXES:
-            allowed = ", ".join(sorted(s[1:] for s in ALLOWED_SUFFIXES))
-            raise HTTPException(400, f"올릴 수 없는 파일 형식입니다. {allowed} 파일을 올리세요.")
-        job_id = uuid.uuid4().hex
-        job_dir = store.path(job_id)
-        job_dir.mkdir()
-        audio = job_dir / f"audio{suffix}"
-        try:
-            copied = 0
-            with open(audio, "wb") as out:
-                while chunk := file.file.read(1024 * 1024):
-                    copied += len(chunk)
-                    if copied > MAX_UPLOAD_BYTES:
-                        raise HTTPException(413, "파일이 너무 큽니다. 1GB 이하로 올리세요.")
-                    out.write(chunk)
-            duration = probe_duration(audio)
-        except Exception:
-            shutil.rmtree(job_dir)
-            raise
+    def register_upload(job_id, name, suffix, incoming):
+        """올라온 파일이 오디오인지 확인하고 처리 대기열에 넣는다."""
+        audio = incoming.with_name(f"audio{suffix}")
+        os.replace(incoming, audio)
+        duration = probe_duration(audio)
         job = {
             "id": job_id,
             "name": name,
@@ -270,6 +275,42 @@ def create_app(data_dir="jobs", process=default_process):
         store.write(job)
         worker.queue.put(job_id)
         return next(view for view in public_jobs(store) if view["id"] == job_id)
+
+    @app.post("/api/jobs", status_code=201)
+    async def create_job(request: Request):
+        # 웹 화면은 양식으로 보내고, 아이폰 단축어는 파일을 본문 그대로 보낼 수 있다.
+        content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        job_id = uuid.uuid4().hex
+        job_dir = store.path(job_id)
+        job_dir.mkdir()
+        incoming = job_dir / "upload.tmp"
+        try:
+            if content_type == "multipart/form-data":
+                async with request.form() as form:
+                    upload = next((value for value in form.values() if isinstance(value, UploadFile)), None)
+                    if upload is None:
+                        raise HTTPException(400, "파일이 들어 있지 않습니다. 녹음 파일을 올리세요.")
+                    name = Path(upload.filename or "녹음").name[:200]
+                    suffix = Path(name).suffix.lower()
+                    if suffix not in ALLOWED_SUFFIXES:
+                        allowed = ", ".join(sorted(s[1:] for s in ALLOWED_SUFFIXES))
+                        raise HTTPException(400, f"올릴 수 없는 파일 형식입니다. {allowed} 파일을 올리세요.")
+                    await run_in_threadpool(copy_upload, upload.file, incoming)
+            else:
+                suffix = RAW_SUFFIXES.get(content_type, ".m4a")
+                name = f"아이폰 녹음{suffix}"
+                copied = 0
+                with open(incoming, "wb") as out:
+                    async for chunk in request.stream():
+                        copied += len(chunk)
+                        if copied > MAX_UPLOAD_BYTES:
+                            raise HTTPException(413, TOO_LARGE_MESSAGE)
+                        out.write(chunk)
+            return await run_in_threadpool(register_upload, job_id, name, suffix, incoming)
+        except Exception:
+            logger.warning("업로드를 거절했다: content_type=%s", content_type)
+            shutil.rmtree(job_dir)
+            raise
 
     @app.get("/api/jobs/{job_id}")
     def read_job(job_id: str):
