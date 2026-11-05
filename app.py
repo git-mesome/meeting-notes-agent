@@ -31,6 +31,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 ALLOWED_SUFFIXES = {".m4a", ".mp3", ".wav", ".flac", ".ogg", ".aac", ".mp4", ".webm"}
 MAX_UPLOAD_BYTES = 1024**3
 TOO_LARGE_MESSAGE = "파일이 너무 큽니다. 1GB 이하로 올리세요."
+STILL_STOPPING_MESSAGE = "중지를 마무리하고 있습니다. 잠시 후 다시 시도하세요."
 # 파일 이름 없이 본문으로 올라올 때 쓴다. 내용은 ffprobe로 따로 확인한다.
 RAW_SUFFIXES = {
     "audio/mpeg": ".mp3",
@@ -60,7 +61,8 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy": (
         "default-src 'self'; script-src 'self'; media-src 'self'; "
-        "style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+        "style-src 'self' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+        "font-src https://fonts.gstatic.com https://cdn.jsdelivr.net; "
         "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     ),
 }
@@ -111,12 +113,12 @@ def copy_upload(source, target):
             out.write(chunk)
 
 
-def default_process(audio, out_dir, on_stage):
+def default_process(audio, out_dir, on_stage, on_process):
     from meeting_notes import load_glossary, process_audio
 
     glossary_path = Path("glossary.txt")
     glossary = load_glossary(glossary_path) if glossary_path.exists() else []
-    return process_audio(audio, out_dir, glossary, on_stage)
+    return process_audio(audio, out_dir, glossary, on_stage, on_process)
 
 
 class JobStore:
@@ -154,6 +156,10 @@ class JobStore:
         return sorted((job for job in jobs if job), key=lambda job: job["created_at"], reverse=True)
 
 
+class JobCanceled(Exception):
+    """사용자가 처리를 중지했다."""
+
+
 class Worker(threading.Thread):
     """녹음을 한 번에 한 건씩 처리한다."""
 
@@ -162,28 +168,70 @@ class Worker(threading.Thread):
         self.store = store
         self.process = process
         self.queue = queue.Queue()
+        self.lock = threading.Lock()
+        self.current_job = None
+        self.current_process = None
 
     def run(self):
         while True:
             self.handle(self.queue.get())
 
     def handle(self, job_id):
+        job = self.store.read(job_id)
+        if job is None or job["status"] != "queued":
+            return  # 기다리는 동안 중지했거나 삭제했다.
+        with self.lock:
+            self.current_job = job_id
+        try:
+            self.run_job(job_id)
+        finally:
+            with self.lock:
+                self.current_job = None
+                self.current_process = None
+
+    def run_job(self, job_id):
         job_dir = self.store.path(job_id)
         audio = find_audio(job_dir)
 
         def on_stage(stage):
-            self.store.update(job_id, status=stage, stage_started_at=now())
+            with self.lock:
+                if self.store.read(job_id)["status"] == "canceled":
+                    raise JobCanceled
+                self.store.update(job_id, status=stage, stage_started_at=now())
+
+        def on_process(process):
+            with self.lock:
+                self.current_process = process
+                if self.store.read(job_id)["status"] == "canceled":
+                    process.terminate()
 
         try:
-            usage = self.process(audio, job_dir, on_stage)
+            usage = self.process(audio, job_dir, on_stage, on_process)
             notes = (job_dir / "notes.md").read_text(encoding="utf-8")
-            job = self.store.read(job_id)
-            self.store.update(job_id, status="done", title=notes_title(notes, job["name"]), usage=usage, error=None)
-        except Exception:
-            logger.exception("작업 %s 처리에 실패했다", job_id)
-            stage = self.store.read(job_id)["status"]
-            message = FAILURE_MESSAGES.get(stage, FAILURE_MESSAGES["transcribing"])
-            self.store.update(job_id, status="failed", error=message)
+            with self.lock:
+                job = self.store.read(job_id)
+                if job["status"] != "canceled":
+                    self.store.update(
+                        job_id, status="done", title=notes_title(notes, job["name"]), usage=usage, error=None
+                    )
+        except Exception as error:
+            with self.lock:
+                stage = self.store.read(job_id)["status"]
+                if stage == "canceled":
+                    return
+                logger.error("작업 %s 처리에 실패했다", job_id, exc_info=error)
+                message = FAILURE_MESSAGES.get(stage, FAILURE_MESSAGES["transcribing"])
+                self.store.update(job_id, status="failed", error=message)
+
+    def cancel(self, job_id):
+        with self.lock:
+            self.store.update(job_id, status="canceled", error=None)
+            if self.current_job == job_id and self.current_process:
+                self.current_process.terminate()
+
+    def is_running(self, job_id):
+        with self.lock:
+            return self.current_job == job_id
 
 
 def public_job(job, ahead=0):
@@ -193,11 +241,10 @@ def public_job(job, ahead=0):
         for key in ("id", "name", "title", "status", "created_at", "duration_seconds", "error", "confirmed_at")
     }
     view["ahead"] = ahead
-    view["estimated_seconds"] = None
+    view["estimated_seconds"] = job["duration_seconds"] * SECONDS_PER_AUDIO_SECOND
     view["elapsed_seconds"] = None
     if job["status"] == "transcribing":
         started = datetime.fromisoformat(job["stage_started_at"])
-        view["estimated_seconds"] = job["duration_seconds"] * SECONDS_PER_AUDIO_SECOND
         view["elapsed_seconds"] = (datetime.now(timezone.utc) - started).total_seconds()
     return view
 
@@ -346,11 +393,31 @@ def create_app(data_dir="jobs", process=default_process):
     @app.post("/api/jobs/{job_id}/retry")
     def retry(job_id: str):
         job = get_job(job_id)
-        if job["status"] != "failed":
-            raise HTTPException(409, "실패한 작업만 다시 시도할 수 있습니다.")
+        if job["status"] not in ("failed", "canceled"):
+            raise HTTPException(409, "실패하거나 중지한 작업만 다시 시작할 수 있습니다.")
+        if worker.is_running(job_id):
+            raise HTTPException(409, STILL_STOPPING_MESSAGE)
         store.update(job_id, status="queued", error=None)
         worker.queue.put(job_id)
         return read_job(job_id)
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel(job_id: str):
+        job = get_job(job_id)
+        if job["status"] not in ACTIVE_STATUSES:
+            raise HTTPException(409, "처리 중인 작업만 중지할 수 있습니다.")
+        worker.cancel(job_id)
+        return read_job(job_id)
+
+    @app.delete("/api/jobs/{job_id}")
+    def delete_job(job_id: str):
+        job = get_job(job_id)
+        if job["status"] in ACTIVE_STATUSES:
+            raise HTTPException(409, "처리 중인 회의록은 먼저 중지하세요.")
+        if worker.is_running(job_id):
+            raise HTTPException(409, STILL_STOPPING_MESSAGE)
+        shutil.rmtree(store.path(job_id))
+        return {"ok": True}
 
     @app.get("/api/jobs/{job_id}/audio")
     def audio(job_id: str):

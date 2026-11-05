@@ -1,5 +1,6 @@
 import json
 import subprocess
+import threading
 import time
 
 import pytest
@@ -12,7 +13,7 @@ NOTES = "# 회의록: 예시 회의\n\n## 요약\n- 내용이다. [00:01]\n"
 TURNS = [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00", "text": "예시 발언이다."}]
 
 
-def fake_process(audio, out_dir, on_stage):
+def fake_process(audio, out_dir, on_stage, _on_process=None):
     on_stage("transcribing")
     assert audio.suffix == ".m4a"
     (out_dir / "audio.json").write_text("{}", encoding="utf-8")
@@ -209,12 +210,12 @@ def test_audio_supports_range_requests(client, tone):
 def test_failure_can_be_retried_without_exposing_details(tmp_path, tone):
     calls = []
 
-    def flaky(audio, out_dir, on_stage):
+    def flaky(audio, out_dir, on_stage, on_process):
         calls.append(audio)
         if len(calls) == 1:
             on_stage("writing")
             raise RuntimeError("비밀 내용이 든 예외")
-        return fake_process(audio, out_dir, on_stage)
+        return fake_process(audio, out_dir, on_stage, on_process)
 
     with make_client(tmp_path, flaky) as test_client:
         job_id = upload(test_client, tone)
@@ -228,12 +229,12 @@ def test_failure_can_be_retried_without_exposing_details(tmp_path, tone):
 def test_retry_uses_audio_not_transcript_json(tmp_path, tone):
     seen = []
 
-    def flaky(audio, out_dir, on_stage):
+    def flaky(audio, out_dir, on_stage, on_process):
         seen.append(audio.name)
         (out_dir / "audio.json").write_text("{}", encoding="utf-8")
         if len(seen) == 1:
             raise RuntimeError("실패")
-        return fake_process(audio, out_dir, on_stage)
+        return fake_process(audio, out_dir, on_stage, on_process)
 
     with make_client(tmp_path, flaky) as test_client:
         job_id = upload(test_client, tone)
@@ -241,6 +242,130 @@ def test_retry_uses_audio_not_transcript_json(tmp_path, tone):
         test_client.post(f"/api/jobs/{job_id}/retry")
         wait_for(test_client, job_id, "done")
     assert seen == ["audio.m4a", "audio.m4a"]
+
+
+def long_running_process(started, processes):
+    def process(audio, out_dir, on_stage, on_process):
+        on_stage("transcribing")
+        running = subprocess.Popen(["sleep", "30"])
+        processes.append(running)
+        on_process(running)
+        started.set()
+        if running.wait() != 0:
+            raise subprocess.CalledProcessError(running.returncode, "sleep")
+        return fake_process(audio, out_dir, on_stage)
+
+    return process
+
+
+def test_cancel_stops_running_process_and_can_restart(tmp_path, tone):
+    started, processes = threading.Event(), []
+    with make_client(tmp_path, long_running_process(started, processes)) as test_client:
+        job_id = upload(test_client, tone)
+        assert started.wait(5)
+
+        response = test_client.post(f"/api/jobs/{job_id}/cancel")
+        assert response.status_code == 200
+        assert response.json()["status"] == "canceled"
+        assert processes[0].wait(5) != 0
+        deadline = time.time() + 5
+        while test_client.post(f"/api/jobs/{job_id}/retry").status_code == 409 and time.time() < deadline:
+            time.sleep(0.02)
+
+        job = wait_for(test_client, job_id, "transcribing")
+        assert job["error"] is None
+        started.clear()
+        assert started.wait(5)
+        test_client.post(f"/api/jobs/{job_id}/cancel")
+        assert processes[1].wait(5) != 0
+        assert not (tmp_path / job_id / "notes.md").exists()
+
+
+def test_cancel_keeps_status_after_process_fails(tmp_path, tone):
+    started, processes = threading.Event(), []
+    with make_client(tmp_path, long_running_process(started, processes)) as test_client:
+        job_id = upload(test_client, tone)
+        assert started.wait(5)
+        test_client.post(f"/api/jobs/{job_id}/cancel")
+        processes[0].wait(5)
+        time.sleep(0.1)
+        job = test_client.get(f"/api/jobs/{job_id}").json()
+        assert job["status"] == "canceled"
+        assert job["error"] is None
+
+
+def test_cancel_queued_job_is_never_processed(tmp_path, tone):
+    started, processes = threading.Event(), []
+    with make_client(tmp_path, long_running_process(started, processes)) as test_client:
+        first = upload(test_client, tone)
+        assert started.wait(5)
+        second = upload(test_client, tone)
+        assert test_client.get(f"/api/jobs/{second}").json()["ahead"] == 1
+        assert test_client.post(f"/api/jobs/{second}/cancel").json()["status"] == "canceled"
+        test_client.post(f"/api/jobs/{first}/cancel")
+        processes[0].wait(5)
+        time.sleep(0.1)
+        assert len(processes) == 1
+        assert test_client.get(f"/api/jobs/{second}").json()["status"] == "canceled"
+
+
+def test_cancel_finished_job_is_refused(client, tone):
+    job_id = wait_for(client, upload(client, tone), "done")["id"]
+    assert client.post(f"/api/jobs/{job_id}/cancel").status_code == 409
+
+
+def test_cancel_during_writing_discards_result(tmp_path, tone):
+    release, writing = threading.Event(), threading.Event()
+
+    def process(audio, out_dir, on_stage, on_process):
+        fake_process(audio, out_dir, on_stage, on_process)
+        writing.set()
+        assert release.wait(5)
+        return {"input_tokens": 1, "output_tokens": 1}
+
+    with make_client(tmp_path, process) as test_client:
+        job_id = upload(test_client, tone)
+        assert writing.wait(5)
+        test_client.post(f"/api/jobs/{job_id}/cancel")
+        assert test_client.delete(f"/api/jobs/{job_id}").status_code == 409
+        release.set()
+        time.sleep(0.2)
+        assert test_client.get(f"/api/jobs/{job_id}").json()["status"] == "canceled"
+        assert test_client.delete(f"/api/jobs/{job_id}").status_code == 200
+
+
+def test_delete_removes_everything(client, tone, tmp_path):
+    job_id = wait_for(client, upload(client, tone), "done")["id"]
+    assert client.delete(f"/api/jobs/{job_id}").status_code == 200
+    assert not (tmp_path / job_id).exists()
+    assert client.get(f"/api/jobs/{job_id}").status_code == 404
+    assert client.get("/api/jobs").json() == []
+
+
+def test_delete_refused_while_processing(tmp_path, tone):
+    started, processes = threading.Event(), []
+    with make_client(tmp_path, long_running_process(started, processes)) as test_client:
+        job_id = upload(test_client, tone)
+        assert started.wait(5)
+        response = test_client.delete(f"/api/jobs/{job_id}")
+        assert response.status_code == 409
+        assert "먼저 중지" in response.json()["detail"]
+        assert (tmp_path / job_id).exists()
+        test_client.post(f"/api/jobs/{job_id}/cancel")
+        processes[0].wait(5)
+
+
+def test_delete_from_another_site_is_refused(client, tone, tmp_path):
+    job_id = wait_for(client, upload(client, tone), "done")["id"]
+    response = client.delete(f"/api/jobs/{job_id}", headers={"Origin": "https://evil.example"})
+    assert response.status_code == 403
+    assert (tmp_path / job_id).exists()
+
+
+@pytest.mark.parametrize("job_id", ["..", "nope", "0" * 32])
+def test_delete_unknown_job_is_not_found(client, job_id, tmp_path):
+    assert client.delete(f"/api/jobs/{job_id}").status_code in (404, 405)
+    assert tmp_path.exists()
 
 
 def test_retry_is_refused_for_finished_job(client, tone):

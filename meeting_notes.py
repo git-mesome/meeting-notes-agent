@@ -40,8 +40,11 @@ SYSTEM_PROMPT = """사내 회의 전사문을 회의록으로 정리한다. 전�
 ## 확인 필요"""
 
 
-def transcribe(audio, out_dir, glossary):
-    """WhisperX로 전사하고 화자를 구분한다. Hugging Face 토큰은 환경 변수 HF_TOKEN에서 읽는다."""
+def transcribe(audio, out_dir, glossary, on_process=lambda process: None):
+    """WhisperX로 전사하고 화자를 구분한다. Hugging Face 토큰은 환경 변수 HF_TOKEN에서 읽는다.
+
+    on_process는 실행한 프로세스를 받는다. 호출한 쪽에서 중지할 때 쓴다.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = [
         "whisperx", str(audio),
@@ -53,7 +56,11 @@ def transcribe(audio, out_dir, glossary):
     if glossary:
         cmd += ["--hotwords", ", ".join(glossary)]
     with open(out_dir / "whisperx.log", "w", encoding="utf-8") as log:
-        subprocess.run(cmd, check=True, stdout=log, stderr=subprocess.STDOUT)
+        process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
+        on_process(process)
+        if process.wait() != 0:
+            (out_dir / f"{audio.stem}.json").unlink(missing_ok=True)
+            raise subprocess.CalledProcessError(process.returncode, cmd)
 
 
 def format_time(seconds):
@@ -131,12 +138,12 @@ def load_glossary(path):
     return [line.strip() for line in lines if line.strip()]
 
 
-def process_audio(audio, out_dir, glossary, on_stage=lambda stage: None):
+def process_audio(audio, out_dir, glossary, on_stage=lambda stage: None, on_process=lambda process: None):
     """녹음 하나를 처리해 out_dir에 결과를 저장하고 사용한 토큰 수를 돌려준다. 전사 JSON이 있으면 전사를 건너뛴다."""
     transcript_json = out_dir / f"{audio.stem}.json"
     if not transcript_json.exists():
         on_stage("transcribing")
-        transcribe(audio, out_dir, glossary)
+        transcribe(audio, out_dir, glossary, on_process)
 
     segments = json.loads(transcript_json.read_text(encoding="utf-8"))["segments"]
     turns = to_turns(segments)

@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -25,7 +27,7 @@ SEGMENTS = {
 def pipeline(monkeypatch):
     calls = SimpleNamespace(transcribe=0, transcript=None, glossary=None)
 
-    def fake_transcribe(audio, out_dir, glossary):
+    def fake_transcribe(audio, out_dir, glossary, _on_process):
         calls.transcribe += 1
         calls.glossary = glossary
         (out_dir / f"{audio.stem}.json").write_text(json.dumps(SEGMENTS, ensure_ascii=False), encoding="utf-8")
@@ -59,6 +61,22 @@ def test_skips_transcription_when_result_exists(tmp_path, pipeline):
     meeting_notes.process_audio(tmp_path / "audio.m4a", tmp_path, [], stages.append)
     assert pipeline.transcribe == 0
     assert stages == ["writing"]
+
+
+def test_failed_transcription_reports_process_and_removes_partial_result(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "whisperx"
+    fake.write_text("#!/bin/sh\necho '{' > \"$(dirname \"$1\")/audio.json\"\nexit 3\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    processes = []
+
+    with pytest.raises(subprocess.CalledProcessError):
+        meeting_notes.transcribe(tmp_path / "audio.m4a", tmp_path, [], processes.append)
+
+    assert processes[0].returncode == 3
+    assert not (tmp_path / "audio.json").exists()
 
 
 def test_load_glossary_ignores_blank_lines(tmp_path):

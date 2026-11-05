@@ -43,7 +43,7 @@ SAMPLE_TURNS = [
 ]
 
 
-def fake_process(_audio, out_dir, on_stage):
+def fake_process(_audio, out_dir, on_stage, _on_process):
     delay = float(os.environ.get("FAKE_STAGE_SECONDS", "15"))
     on_stage("transcribing")
     time.sleep(delay)
