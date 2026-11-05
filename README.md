@@ -13,7 +13,7 @@ HF_TOKEN=Hugging Face 토큰
 ANTHROPIC_API_KEY=Claude API 키
 ```
 
-- 사내 용어를 한 줄에 하나씩 `glossary.txt`에 적으면 전사와 회의록 작성에 함께 쓴다. 전사에는 넣을 수 있는 분량이 적으므로 자주 쓰는 말만 적는다.
+- 기술 용어를 한 줄에 하나씩 `glossary.txt`에 적으면 전사와 회의록 작성에 함께 쓴다. 사람 이름이나 회사명은 적지 않는다. 전사 모델이 비슷한 소리를 그 이름으로 바꿔 써서, 실제 발언이 다른 이름으로 기록되거나 사라진다. 고유명사는 `knowledge/`에 두면 회의록을 쓸 때 바로잡는다.
 - `knowledge/meeting_context.md`(사내 배경 지식)와 `knowledge/terms.json`(표준 용어)이 있으면 회의록과 질문 답변에 쓴다. 정의는 그 회의에 나온 용어만 보낸다. `glossary.txt`와 `knowledge/`는 커밋하지 않는다.
 
 ## 웹 화면
