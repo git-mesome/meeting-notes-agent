@@ -43,11 +43,20 @@ SAMPLE_TURNS = [
 ]
 
 
+SAMPLE_EMBEDDINGS = {"SPEAKER_00": [1.0, 0.0, 0.0], "SPEAKER_01": [0.0, 1.0, 0.0], "SPEAKER_02": [0.0, 0.0, 1.0]}
+
+
+def fake_answer(_transcript, _notes, question):
+    time.sleep(1)
+    return f"'{question}'에 대한 예시 답변이에요. 본사부터 교체하기로 했어요. [00:12] [01:05]"
+
+
 def fake_process(_audio, out_dir, on_stage, _on_process):
     delay = float(os.environ.get("FAKE_STAGE_SECONDS", "15"))
     on_stage("transcribing")
     time.sleep(delay)
     (out_dir / "turns.json").write_text(json.dumps(SAMPLE_TURNS, ensure_ascii=False), encoding="utf-8")
+    (out_dir / "audio.json").write_text(json.dumps({"speaker_embeddings": SAMPLE_EMBEDDINGS}), encoding="utf-8")
     on_stage("writing")
     time.sleep(delay / 3)
     (out_dir / "notes.md").write_text(SAMPLE_NOTES, encoding="utf-8")
@@ -55,4 +64,4 @@ def fake_process(_audio, out_dir, on_stage, _on_process):
 
 
 def create():
-    return create_app(data_dir=os.environ.get("FAKE_DATA_DIR", "jobs-fake"), process=fake_process)
+    return create_app(data_dir=os.environ.get("FAKE_DATA_DIR", "jobs-fake"), process=fake_process, answer=fake_answer)

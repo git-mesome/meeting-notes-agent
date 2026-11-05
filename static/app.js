@@ -16,6 +16,11 @@ const ICONS = {
   back: "M15 5l-7 7 7 7",
   next: "M9 5l7 7-7 7",
   more: "M5 12h.01M12 12h.01M19 12h.01",
+  search: "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3",
+  bell: "M6 16V11a6 6 0 1 1 12 0v5l2 2H4zM10 21h4",
+  voice: "M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3",
+  send: "M12 19V5m0 0l-6 6m6-6l6 6",
+  rewrite: "M4 12a8 8 0 0 1 14-5.3L20 9m0-5v5h-5M20 12a8 8 0 0 1-14 5.3L4 15m0 5v-5h5",
   play: "M8 5l11 7-11 7z",
   stop: "M7 7h10v10H7z",
   alert: "M12 8v5m0 3.5h.01M12 3l9.5 17h-19z",
@@ -26,6 +31,13 @@ const PAUSE_ICON = "M6 4h4v16H6zM14 4h4v16h-4z";
 let pollTimer = null;
 let cleanup = null;
 let unsaved = false;
+let templatesCache = null;
+let selectedTemplate = "general";
+
+async function loadTemplates() {
+  if (!templatesCache) templatesCache = await api("/api/templates");
+  return templatesCache;
+}
 
 function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
@@ -246,6 +258,30 @@ async function deleteJob(job) {
 
 /* 목록 */
 
+function templateChips(templates) {
+  const chips = templates.map((template) =>
+    el("button", {
+      class: "chip",
+      type: "button",
+      text: template.label,
+      "aria-pressed": String(template.key === selectedTemplate),
+      onclick: (event) => {
+        selectedTemplate = template.key;
+        for (const chip of chips) chip.setAttribute("aria-pressed", String(chip === event.currentTarget));
+        hint.textContent = template.description;
+      },
+    }),
+  );
+  const current = templates.find((template) => template.key === selectedTemplate);
+  const hint = el("p", { class: "chip-hint", text: current ? current.description : "" });
+  return el(
+    "div",
+    { class: "template-picker" },
+    el("div", { class: "chips", role: "group", "aria-label": "회의 종류" }, ...chips),
+    hint,
+  );
+}
+
 function uploadSection(onUploaded) {
   const meterBox = el("div", { class: "upload-meter" });
   const input = el("input", { type: "file", accept: ACCEPT, id: "audio-file" });
@@ -271,7 +307,7 @@ function uploadSection(onUploaded) {
     };
 
     const request = new XMLHttpRequest();
-    request.open("POST", "/api/jobs");
+    request.open("POST", `/api/jobs?template=${encodeURIComponent(selectedTemplate)}`);
     request.responseType = "json";
     request.upload.addEventListener("progress", (event) => {
       if (!event.lengthComputable) return;
@@ -317,9 +353,181 @@ function noteRow(job) {
   return el("li", {}, el("a", { class: "note-row", href: `#/jobs/${job.id}` }, body, badge(job), icon("next")));
 }
 
+function highlighted(text, query) {
+  const letters = [...query].filter((char) => char.trim()).map((char) => char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!letters.length) return [text];
+  const pattern = new RegExp(letters.join("\\s*"), "gi");
+  const parts = [];
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    parts.push(text.slice(last, match.index), el("mark", { text: match[0] }));
+    last = match.index + match[0].length;
+  }
+  parts.push(text.slice(last));
+  return parts;
+}
+
+function searchResult(result, query) {
+  const rows = [];
+  if (result.notes) {
+    rows.push(
+      el(
+        "a",
+        { class: "search-hit", href: `#/jobs/${result.id}` },
+        el("span", { class: "search-tag", text: "회의록" }),
+        el("span", {}, ...highlighted(result.notes, query)),
+      ),
+    );
+  }
+  for (const hit of result.hits) {
+    rows.push(
+      el(
+        "a",
+        { class: "search-hit", href: `#/jobs/${result.id}?t=${Math.floor(hit.start)}` },
+        el("span", { class: "search-tag", text: clock(hit.start) }),
+        el("span", {}, `${hit.speaker}: `, ...highlighted(hit.text, query)),
+      ),
+    );
+  }
+  const extra = result.hit_count - result.hits.length;
+  return el(
+    "div",
+    { class: "card search-result" },
+    el(
+      "a",
+      { class: "search-title", href: `#/jobs/${result.id}` },
+      el("span", { class: "note-title" }, ...highlighted(result.title, query)),
+      el("span", { class: "meta", text: `${dateText(result.created_at)}, ${spanOfTime(result.duration_seconds)} 녹음` }),
+    ),
+    ...rows,
+    extra > 0 ? el("p", { class: "search-more", text: `전사문에서 ${extra}곳 더 나왔어요` }) : null,
+  );
+}
+
+function searchBox(list) {
+  const results = el("section", { class: "search-results", "aria-live": "polite", hidden: true });
+  let timer = null;
+  let latest = 0;
+  const run = async (query) => {
+    const ticket = ++latest;
+    try {
+      const found = await api(`/api/search?q=${encodeURIComponent(query)}`);
+      if (ticket !== latest) return;
+      results.replaceChildren(
+        ...(found.length
+          ? found.map((result) => searchResult(result, query))
+          : [el("p", { class: "empty card", text: `'${query}'이 나온 회의가 없어요.` })]),
+      );
+    } catch (error) {
+      if (ticket === latest) toast(error.message, true);
+    }
+  };
+  const input = el("input", {
+    class: "search-input",
+    type: "search",
+    placeholder: "지난 회의에서 찾기",
+    "aria-label": "회의록 검색",
+    autocomplete: "off",
+    enterkeyhint: "search",
+    oninput: () => {
+      clearTimeout(timer);
+      const query = input.value.trim();
+      results.hidden = !query;
+      list.hidden = Boolean(query);
+      if (!query) {
+        latest += 1;
+        results.replaceChildren();
+        return;
+      }
+      timer = setTimeout(() => run(query), 250);
+    },
+  });
+  return {
+    box: el("label", { class: "search-box" }, icon("search"), input),
+    results,
+  };
+}
+
+/* 완료 알림 */
+
+function base64UrlToBytes(text) {
+  const raw = atob(text.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(text.length / 4) * 4, "="));
+  return Uint8Array.from(raw, (char) => char.charCodeAt(0));
+}
+
+async function pushStatus() {
+  if (!window.isSecureContext) return "insecure";
+  const standalone = window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+  const isIos = /iP(hone|ad|od)/.test(navigator.userAgent);
+  if (isIos && !standalone) return "install";
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return "unsupported";
+  if (Notification.permission === "denied") return "denied";
+  const registration = await navigator.serviceWorker.register("/sw.js");
+  const subscription = await registration.pushManager.getSubscription();
+  return subscription ? "on" : "ready";
+}
+
+async function turnOnPush() {
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    toast("알림을 허용해야 받을 수 있어요", true);
+    return false;
+  }
+  const registration = await navigator.serviceWorker.ready;
+  const { key } = await api("/api/push/key");
+  const subscription = await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: base64UrlToBytes(key),
+  });
+  const { endpoint, keys } = subscription.toJSON();
+  await api("/api/push/subscribe", jsonOptions("POST", { endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } }));
+  toast("이제 끝나면 알려 드릴게요");
+  return true;
+}
+
+function pushCard() {
+  const card = el("section", { class: "card push-card", hidden: true });
+  const show = (title, body, action) => {
+    card.replaceChildren(
+      el("div", { class: "push-icon" }, icon("bell")),
+      el("div", { class: "push-text" }, el("strong", { text: title }), body ? el("span", { text: body }) : null),
+      action,
+    );
+    card.hidden = false;
+  };
+  pushStatus()
+    .then((status) => {
+      if (status === "ready") {
+        const on = button("켜기", {
+          variant: "primary",
+          onclick: async () => {
+            on.disabled = true;
+            try {
+              if (await turnOnPush()) card.hidden = true;
+              else on.disabled = false;
+            } catch (error) {
+              toast("알림을 켜지 못했어요. 잠시 후 다시 시도해 주세요.", true);
+              on.disabled = false;
+            }
+          },
+        });
+        show("다 되면 알려 드릴까요?", "오래 걸리는 회의도 기다리지 않아도 돼요.", on);
+      } else if (status === "install") {
+        show("다 되면 알림을 받아 보세요", "공유 버튼에서 '홈 화면에 추가'를 누른 뒤, 홈 화면의 회의록 앱에서 켤 수 있어요.");
+      } else if (status === "insecure") {
+        show("완료 알림은 HTTPS 주소에서 켤 수 있어요", "지금은 HTTP로 접속 중이에요.");
+      } else if (status === "denied") {
+        show("알림이 꺼져 있어요", "기기 설정에서 회의록 알림을 허용해 주세요.");
+      }
+    })
+    .catch(() => {});
+  return card;
+}
+
 async function renderList() {
   const page = setScreen();
   const list = el("section", { "aria-label": "내 회의록" });
+  const search = searchBox(list);
   const refresh = async () => {
     clearTimeout(pollTimer);
     let jobs;
@@ -342,18 +550,24 @@ async function renderList() {
           : el("p", { class: "empty", text: "아직 회의록이 없어요. 첫 녹음을 올려 보세요." }),
       ),
       el("p", { class: "hint", text: "아이폰 음성 메모는 공유 메뉴에서 '파일에 저장'한 뒤 고르면 돼요." }),
+      el("a", { class: "manage-link", href: "#/voices" }, icon("voice"), "등록한 목소리 관리"),
     );
     if (jobs.some(isActive)) pollTimer = setTimeout(refresh, POLL_MS);
   };
   const title = el("h1", {}, "녹음만 올리면", el("br"), "회의록이 완성돼요");
+  const templates = await loadTemplates();
   page.append(
     el(
       "section",
       { class: "hero" },
       title,
       el("p", { text: "누가 무슨 말을 했는지 정리해 초안까지 만들어 드려요." }),
+      templateChips(templates),
       uploadSection(refresh),
     ),
+    pushCard(),
+    search.box,
+    search.results,
     list,
   );
   await refresh();
@@ -497,7 +711,7 @@ function renderRibbon(turns, duration, speakers, seek, onName) {
             onclick: () => onName(speaker),
           },
           el("span", { class: "ribbon-name-text", text: speaker.name }),
-          icon("pencil"),
+          speaker.auto ? el("span", { class: "auto-tag", text: "자동" }) : icon("pencil"),
         ),
         el("span", { class: "ribbon-share", text: `${speaker.share}%` }),
         track,
@@ -589,11 +803,150 @@ function renderEditor(job) {
   );
 }
 
+function renderAsk(job, seek, friendly) {
+  const history = el("div", { class: "qa-list" });
+  const addItem = (question, answerNodes) => {
+    const answer = el("div", { class: "qa-answer" }, ...answerNodes);
+    const item = el("div", { class: "qa-item" }, el("p", { class: "qa-question", text: question }), answer);
+    history.append(item);
+    return { item, answer };
+  };
+  const answerNodes = (text) =>
+    friendly(text)
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => el("p", {}, ...inline(line, seek)));
+  for (const item of job.questions) addItem(item.question, answerNodes(item.answer));
+
+  const input = el("input", {
+    class: "text-input qa-input",
+    type: "text",
+    maxlength: 500,
+    placeholder: "회의 내용을 물어보세요",
+    "aria-label": "질문",
+    autocomplete: "off",
+    enterkeyhint: "send",
+  });
+  const send = el(
+    "button",
+    { class: "qa-send", type: "submit", "aria-label": "질문 보내기" },
+    icon("send"),
+  );
+  const ask = async (question) => {
+    const pending = addItem(question, [el("p", { class: "qa-pending", text: "답을 찾고 있어요" })]);
+    suggestions.hidden = true;
+    send.disabled = true;
+    pending.item.scrollIntoView({ block: "nearest" });
+    try {
+      const result = await api(`/api/jobs/${job.id}/ask`, jsonOptions("POST", { question }));
+      pending.answer.replaceChildren(...answerNodes(result.answer));
+    } catch (error) {
+      pending.item.remove();
+      toast(error.message, true);
+      input.value = question;
+    }
+    send.disabled = false;
+  };
+  const suggestions = el(
+    "div",
+    { class: "chips qa-suggestions", hidden: job.questions.length > 0 },
+    ...["결정된 내용만 알려 줘", "누가 무슨 일을 맡았어?", "아직 정해지지 않은 건 뭐야?"].map((text) =>
+      el("button", { class: "chip", type: "button", text, onclick: () => ask(text) }),
+    ),
+  );
+  const form = el(
+    "form",
+    {
+      class: "qa-form",
+      onsubmit: (event) => {
+        event.preventDefault();
+        const question = input.value.trim();
+        if (!question || send.disabled) return;
+        input.value = "";
+        ask(question);
+      },
+    },
+    input,
+    send,
+  );
+  return el(
+    "section",
+    { class: "card ask" },
+    el("h2", { text: "회의에 대해 물어보세요" }),
+    el("p", { class: "ask-note", text: "답변에는 근거 시각이 함께 나와요. 질문할 때마다 API 비용이 조금 들어요." }),
+    history,
+    suggestions,
+    form,
+  );
+}
+
+async function openTemplateMenu(job) {
+  let templates;
+  try {
+    templates = await loadTemplates();
+  } catch (error) {
+    toast(error.message, true);
+    return;
+  }
+  openSheet((close) => [
+    el("h2", { text: "어떤 양식으로 다시 쓸까요?" }),
+    el("p", { text: "전사는 다시 하지 않고 회의록만 새로 써요." }),
+    el(
+      "div",
+      { class: "sheet-menu template-menu" },
+      ...templates.map((template) =>
+        el(
+          "button",
+          {
+            class: "sheet-item",
+            type: "button",
+            onclick: async () => {
+              close();
+              const agreed = await confirmSheet({
+                title: `'${template.label}' 양식으로 다시 쓸까요?`,
+                body: "지금 회의록은 새 내용으로 바뀌고, 직접 수정한 내용도 사라져요. API 비용이 들어요.",
+                action: "다시 쓰기",
+              });
+              if (!agreed) return;
+              try {
+                await api(`/api/jobs/${job.id}/regenerate`, jsonOptions("POST", { template: template.key }));
+                route();
+              } catch (error) {
+                toast(error.message, true);
+              }
+            },
+          },
+          el(
+            "span",
+            { class: "template-text" },
+            el("strong", { text: template.label }),
+            el("small", { text: template.description }),
+          ),
+          template.key === job.template ? el("span", { class: "badge", text: "지금 양식" }) : null,
+        ),
+      ),
+    ),
+  ]);
+}
+
 function openMoreMenu(job) {
   openSheet((close) => [
     el(
       "div",
       { class: "sheet-menu" },
+      el(
+        "button",
+        {
+          class: "sheet-item",
+          type: "button",
+          onclick: () => {
+            close();
+            openTemplateMenu(job);
+          },
+        },
+        icon("rewrite"),
+        "다른 양식으로 다시 쓰기",
+      ),
       el(
         "button",
         {
@@ -630,7 +983,7 @@ function openMoreMenu(job) {
   ]);
 }
 
-function renderDetail(job, { justConfirmed = false, restore = null } = {}) {
+function renderDetail(job, { justConfirmed = false, restore = null, startAt = null } = {}) {
   const page = setScreen({
     wide: true,
     back: true,
@@ -712,7 +1065,7 @@ function renderDetail(job, { justConfirmed = false, restore = null } = {}) {
   }
 
   function currentView() {
-    return { scrollY: window.scrollY, showNotes: notesTab.getAttribute("aria-selected") === "true", time: audio.currentTime };
+    return { scrollY: window.scrollY, view: activeView, sideView, time: audio.currentTime };
   }
 
   function openSpeakerSheet(speaker) {
@@ -751,12 +1104,16 @@ function renderDetail(job, { justConfirmed = false, restore = null } = {}) {
       autocomplete: "off",
     });
     input.value = speaker.custom ? speaker.name : "";
+    const remember = el("input", { type: "checkbox", id: "remember-voice" });
 
     const view = currentView();
     const sheet = openSheet((close) => {
       const save = el("button", { class: "button primary", type: "submit", text: "저장" });
       return [
         el("h2", { text: "이 사람은 누구인가요?" }),
+        speaker.auto
+          ? el("p", { class: "auto-note", text: "목소리로 자동 인식한 이름이에요. 틀렸다면 고쳐 주세요." })
+          : null,
         el("div", { class: "sample" }, quote, listen),
         el(
           "form",
@@ -767,7 +1124,7 @@ function renderDetail(job, { justConfirmed = false, restore = null } = {}) {
               try {
                 const updated = await api(
                   `/api/jobs/${job.id}/speakers/${speaker.label}`,
-                  jsonOptions("PUT", { name: input.value }),
+                  jsonOptions("PUT", { name: input.value, remember: remember.checked }),
                 );
                 close();
                 toast(input.value.trim() ? "이름을 바꿨어요" : "기본 이름으로 되돌렸어요");
@@ -780,6 +1137,19 @@ function renderDetail(job, { justConfirmed = false, restore = null } = {}) {
           },
           input,
           el("p", { class: "input-hint", text: `비워 두면 '${speaker.default_name}'로 표시돼요.` }),
+          speaker.has_voice
+            ? el(
+                "label",
+                { class: "check-row", for: "remember-voice" },
+                remember,
+                el(
+                  "span",
+                  {},
+                  el("strong", { text: "다음 회의에서도 이 목소리 알아보기" }),
+                  el("small", { text: "본인 동의를 받은 사람만 켜 주세요. 목소리 특징은 이 기기에만 저장돼요." }),
+                ),
+              )
+            : null,
           el("div", { class: "sheet-actions" }, button("취소", { onclick: close }), save),
         ),
       ];
@@ -809,19 +1179,44 @@ function renderDetail(job, { justConfirmed = false, restore = null } = {}) {
   cleanup = () => audio.pause();
 
   const notesPane = el("div", {}, renderNotes(friendly(job.notes), seek));
-  const transcriptPane = el("div", { class: "card" }, transcript);
+  const transcriptCard = el("div", { class: "card" }, transcript);
+  const askCard = renderAsk(job, seek, friendly);
 
-  const notesTab = el("button", { type: "button", role: "tab", "aria-selected": "true", text: "회의록" });
-  const transcriptTab = el("button", { type: "button", role: "tab", "aria-selected": "false", text: "전사문" });
-  const selectTab = (showNotes) => {
-    notesTab.setAttribute("aria-selected", String(showNotes));
-    transcriptTab.setAttribute("aria-selected", String(!showNotes));
-    notesPane.toggleAttribute("hidden-on-mobile", !showNotes);
-    transcriptPane.toggleAttribute("hidden-on-mobile", showNotes);
-  };
-  notesTab.addEventListener("click", () => selectTab(true));
-  transcriptTab.addEventListener("click", () => selectTab(false));
-  selectTab(restore ? restore.showNotes : true);
+  let activeView = restore?.view || (startAt !== null ? "transcript" : "notes");
+  let sideView = restore?.sideView || "transcript";
+  const tabButton = (view, label) =>
+    el("button", {
+      type: "button",
+      role: "tab",
+      "data-view": view,
+      text: label,
+      onclick: () => setView(view),
+    });
+  const mobileTabs = el(
+    "div",
+    { class: "tabs", role: "tablist" },
+    tabButton("notes", "회의록"),
+    tabButton("transcript", "전사문"),
+    tabButton("ask", "질문하기"),
+  );
+  const sideTabs = el(
+    "div",
+    { class: "side-tabs", role: "tablist" },
+    tabButton("transcript", "전사문"),
+    tabButton("ask", "질문하기"),
+  );
+  const sidePane = el("div", { class: "side" }, sideTabs, transcriptCard, askCard);
+  function setView(view) {
+    activeView = view;
+    if (view !== "notes") sideView = view;
+    for (const tab of mobileTabs.children) tab.setAttribute("aria-selected", String(tab.dataset.view === view));
+    for (const tab of sideTabs.children) tab.setAttribute("aria-selected", String(tab.dataset.view === sideView));
+    notesPane.toggleAttribute("hidden-on-mobile", view !== "notes");
+    sidePane.toggleAttribute("hidden-on-mobile", view === "notes");
+    transcriptCard.hidden = sideView !== "transcript";
+    askCard.hidden = sideView !== "ask";
+  }
+  setView(activeView);
 
   const confirmButton = job.confirmed_at
     ? button("확정됨", { variant: "done", disabled: true, iconName: "check" })
@@ -849,8 +1244,8 @@ function renderDetail(job, { justConfirmed = false, restore = null } = {}) {
       el("span", { class: "meta", text: `${metaText(job)}${job.edited ? ", 수정함" : ""}` }),
     ),
     ribbon.node,
-    el("div", { class: "tabs", role: "tablist" }, notesTab, transcriptTab),
-    el("div", { class: "panes" }, notesPane, transcriptPane),
+    mobileTabs,
+    el("div", { class: "panes" }, notesPane, sidePane),
     audio,
     el(
       "div",
@@ -861,6 +1256,15 @@ function renderDetail(job, { justConfirmed = false, restore = null } = {}) {
     ),
   );
 
+  if (startAt !== null) {
+    showTurn(startAt, true);
+    audio.addEventListener("loadedmetadata", () => {
+      audio.currentTime = startAt;
+    }, { once: true });
+    const index = currentTurnIndex(turns, startAt);
+    if (lineNodes[index]) lineNodes[index].scrollIntoView({ block: "center" });
+  }
+
   if (restore) {
     window.scrollTo(0, restore.scrollY);
     if (restore.time) {
@@ -869,6 +1273,62 @@ function renderDetail(job, { justConfirmed = false, restore = null } = {}) {
       }, { once: true });
     }
   }
+}
+
+/* 등록한 목소리 */
+
+async function renderVoices() {
+  const page = setScreen({ back: true });
+  const voices = await api("/api/voices");
+  const rows = voices.map((voice) =>
+    el(
+      "li",
+      { class: "voice-row" },
+      el(
+        "div",
+        {},
+        el("span", { class: "note-title", text: voice.name }),
+        el("span", { class: "meta", text: `회의 ${voice.samples}건에서 등록, ${dateText(voice.updated_at)}` }),
+      ),
+      button("삭제", {
+        onclick: async () => {
+          const agreed = await confirmSheet({
+            title: `${voice.name}님의 목소리를 지울까요?`,
+            body: "다음 회의부터 자동으로 알아보지 않아요. 이미 정한 이름은 그대로예요.",
+            action: "지우기",
+            danger: true,
+          });
+          if (!agreed) return;
+          try {
+            await api(`/api/voices/${voice.id}`, { method: "DELETE" });
+            toast("지웠어요");
+            renderVoices();
+          } catch (error) {
+            toast(error.message, true);
+          }
+        },
+      }),
+    ),
+  );
+  page.append(
+    el(
+      "section",
+      { class: "hero" },
+      el("h1", { text: "등록한 목소리" }),
+      el("p", { text: "등록한 사람은 다음 회의에서 자동으로 이름이 붙어요. 목소리 특징은 이 기기에만 저장돼요." }),
+    ),
+    el(
+      "div",
+      { class: "card" },
+      rows.length
+        ? el("ul", { class: "note-list" }, ...rows)
+        : el("p", {
+            class: "empty",
+            text: "아직 등록한 목소리가 없어요. 회의록에서 화자 이름을 바꿀 때 등록할 수 있어요.",
+          }),
+    ),
+    el("p", { class: "hint", text: "목소리는 생체 정보예요. 본인 동의를 받은 사람만 등록해 주세요." }),
+  );
 }
 
 function statusMark(job) {
@@ -967,14 +1427,18 @@ function showError(message) {
 
 async function route() {
   document.querySelectorAll("dialog.sheet").forEach((sheet) => sheet.close());
-  const match = location.hash.match(/^#\/jobs\/([0-9a-f]{32})$/);
+  const match = location.hash.match(/^#\/jobs\/([0-9a-f]{32})(?:\?t=(\d+))?$/);
   try {
+    if (location.hash === "#/voices") {
+      await renderVoices();
+      return;
+    }
     if (!match) {
       await renderList();
       return;
     }
     const job = await api(`/api/jobs/${match[1]}`);
-    if (job.status === "done") renderDetail(job);
+    if (job.status === "done") renderDetail(job, { startAt: match[2] ? Number(match[2]) : null });
     else renderWaiting(job);
   } catch (error) {
     if (error instanceof ApiError) {
@@ -983,6 +1447,10 @@ async function route() {
       showError("노트북에 연결할 수 없어요. 노트북과 Tailscale이 켜져 있는지 확인한 뒤 새로고침해 주세요.");
     }
   }
+}
+
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
 
 window.addEventListener("hashchange", route);

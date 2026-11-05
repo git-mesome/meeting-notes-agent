@@ -269,13 +269,13 @@ def test_cancel_stops_running_process_and_can_restart(tmp_path, tone):
         assert response.status_code == 200
         assert response.json()["status"] == "canceled"
         assert processes[0].wait(5) != 0
+        started.clear()
         deadline = time.time() + 5
         while test_client.post(f"/api/jobs/{job_id}/retry").status_code == 409 and time.time() < deadline:
             time.sleep(0.02)
 
         job = wait_for(test_client, job_id, "transcribing")
         assert job["error"] is None
-        started.clear()
         assert started.wait(5)
         test_client.post(f"/api/jobs/{job_id}/cancel")
         assert processes[1].wait(5) != 0

@@ -32,7 +32,7 @@ def pipeline(monkeypatch):
         calls.glossary = glossary
         (out_dir / f"{audio.stem}.json").write_text(json.dumps(SEGMENTS, ensure_ascii=False), encoding="utf-8")
 
-    def fake_write_notes(transcript, _glossary):
+    def fake_write_notes(transcript, _glossary, _template):
         calls.transcript = transcript
         return "# 회의록: 예시", SimpleNamespace(input_tokens=11, output_tokens=22)
 

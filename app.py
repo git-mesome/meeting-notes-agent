@@ -25,6 +25,10 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from note_templates import DEFAULT_TEMPLATE, TEMPLATES
+from push import PushCenter
+from voices import VoiceBook, write_private
+
 logger = logging.getLogger("meeting_notes.app")
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -121,7 +125,30 @@ def default_process(audio, out_dir, on_stage, on_process):
 
     glossary_path = Path("glossary.txt")
     glossary = load_glossary(glossary_path) if glossary_path.exists() else []
-    return process_audio(audio, out_dir, glossary, on_stage, on_process)
+    template = json.loads((out_dir / "meta.json").read_text(encoding="utf-8")).get("template", DEFAULT_TEMPLATE)
+    return process_audio(audio, out_dir, glossary, on_stage, on_process, template)
+
+
+def default_answer(transcript, notes, question):
+    from meeting_notes import answer_question
+
+    return answer_question(transcript, notes, question)
+
+
+def extract_embeddings(job_dir):
+    """전사 결과에서 화자별 목소리 특징을 꺼내 따로 저장한다."""
+    transcript_json = job_dir / "audio.json"
+    if not transcript_json.exists():
+        return {}
+    embeddings = json.loads(transcript_json.read_text(encoding="utf-8")).get("speaker_embeddings") or {}
+    if embeddings:
+        write_private(job_dir / "speaker_embeddings.json", json.dumps(embeddings))
+    return embeddings
+
+
+def load_embeddings(job_dir):
+    path = job_dir / "speaker_embeddings.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
 class JobStore:
@@ -166,10 +193,12 @@ class JobCanceled(Exception):
 class Worker(threading.Thread):
     """녹음을 한 번에 한 건씩 처리한다."""
 
-    def __init__(self, store, process):
+    def __init__(self, store, process, voices, push):
         super().__init__(daemon=True)
         self.store = store
         self.process = process
+        self.voices = voices
+        self.push = push
         self.queue = queue.Queue()
         self.lock = threading.Lock()
         self.current_job = None
@@ -211,12 +240,15 @@ class Worker(threading.Thread):
         try:
             usage = self.process(audio, job_dir, on_stage, on_process)
             notes = (job_dir / "notes.md").read_text(encoding="utf-8")
+            recognized = self.recognize(job_id, job_dir)
             with self.lock:
                 job = self.store.read(job_id)
-                if job["status"] != "canceled":
-                    self.store.update(
-                        job_id, status="done", title=notes_title(notes, job["name"]), usage=usage, error=None
-                    )
+                if job["status"] == "canceled":
+                    return
+                self.store.update(
+                    job_id, status="done", title=notes_title(notes, job["name"]), usage=usage, error=None, **recognized
+                )
+            self.notify("회의록이 완성됐어요", "눌러서 확인해 보세요", job_id)
         except Exception as error:
             with self.lock:
                 stage = self.store.read(job_id)["status"]
@@ -225,6 +257,34 @@ class Worker(threading.Thread):
                 logger.error("작업 %s 처리에 실패했다", job_id, exc_info=error)
                 message = FAILURE_MESSAGES.get(stage, FAILURE_MESSAGES["transcribing"])
                 self.store.update(job_id, status="failed", error=message)
+            self.notify("회의록을 만들지 못했어요", "눌러서 다시 시도해 보세요", job_id)
+
+    def recognize(self, job_id, job_dir):
+        """등록한 목소리와 대조해 이름을 붙인다. 실패해도 회의록 처리는 계속한다."""
+        try:
+            embeddings = extract_embeddings(job_dir)
+            job = self.store.read(job_id)
+            if not embeddings or job.get("speaker_names") or job.get("auto_speakers"):
+                return {}
+            # 발언이 전사되지 않은 화자가 먼저 짝지어지면 실제 발언자에게 이름이 붙지 않는다.
+            turns = json.loads((job_dir / "turns.json").read_text(encoding="utf-8"))
+            speaking = {turn["speaker"] for turn in turns}
+            matches = self.voices.match({label: value for label, value in embeddings.items() if label in speaking})
+            if not matches:
+                return {}
+            return {
+                "speaker_names": {label: match["name"] for label, match in matches.items()},
+                "auto_speakers": {label: match["score"] for label, match in matches.items()},
+            }
+        except Exception as error:
+            logger.error("작업 %s 화자 인식에 실패했다", job_id, exc_info=error)
+            return {}
+
+    def notify(self, title, body, job_id):
+        try:
+            self.push.notify(title, body, f"/#/jobs/{job_id}")
+        except Exception as error:
+            logger.warning("알림을 보내지 못했다: %s", type(error).__name__)
 
     def cancel(self, job_id):
         with self.lock:
@@ -252,7 +312,7 @@ def public_job(job, ahead=0):
     return view
 
 
-def speaker_list(turns, custom_names):
+def speaker_list(turns, custom_names, auto_speakers=None, voiced=()):
     """말한 시간이 긴 순서로 화자를 정리한다. 이름을 정하지 않은 화자는 "화자 N"으로 부른다."""
     totals = {}
     for turn in turns:
@@ -271,6 +331,8 @@ def speaker_list(turns, custom_names):
                 "name": custom or default_name,
                 "default_name": default_name,
                 "custom": bool(custom),
+                "auto": label in (auto_speakers or {}),
+                "has_voice": label in voiced,
                 "known": known,
                 "share": round(seconds / total * 100),
                 "color": (rank - 1) % 6 if known else 0,
@@ -291,17 +353,60 @@ def public_jobs(store):
     return [public_job(job, position.get(job["id"], 0)) for job in jobs]
 
 
+def plain_text(markdown):
+    """검색 결과에 보여 주려고 마크다운 기호와 근거 시각을 뺀다."""
+    return re.sub(r"\[\d{1,2}:\d{2}(?::\d{2})?\]|[#|*]+|^\s*-+\s*$", " ", markdown, flags=re.M)
+
+
+def search_pattern(query):
+    """전사문은 띄어쓰기가 불규칙하므로 공백을 무시하고 찾는다."""
+    letters = [re.escape(char) for char in query if not char.isspace()]
+    return re.compile(r"\s*".join(letters), re.IGNORECASE) if letters else None
+
+
+def snippet(text, match, around=40):
+    start = max(0, match.start() - around)
+    end = min(len(text), match.end() + around)
+    body = " ".join(text[start:end].split())
+    return f"{'…' if start else ''}{body}{'…' if end < len(text) else ''}"
+
+
 class NotesUpdate(BaseModel):
     notes: str = Field(min_length=1, max_length=1_000_000)
 
 
 class SpeakerName(BaseModel):
     name: str = Field(max_length=20)
+    remember: bool = False
 
 
-def create_app(data_dir="jobs", process=default_process):
+class Question(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+
+
+class Regenerate(BaseModel):
+    template: str
+
+
+class PushKeys(BaseModel):
+    p256dh: str = Field(max_length=300)
+    auth: str = Field(max_length=100)
+
+
+class PushSubscription(BaseModel):
+    endpoint: str = Field(max_length=1000, pattern=r"^https://")
+    keys: PushKeys
+
+
+class PushEndpoint(BaseModel):
+    endpoint: str = Field(max_length=1000)
+
+
+def create_app(data_dir="jobs", process=default_process, answer=default_answer, push_send=None):
     store = JobStore(data_dir)
-    worker = Worker(store, process)
+    voices = VoiceBook(data_dir)
+    push = PushCenter(data_dir, send=push_send)
+    worker = Worker(store, process, voices, push)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -342,11 +447,90 @@ def create_app(data_dir="jobs", process=default_process):
         if job["status"] != "done":
             raise HTTPException(409, "아직 회의록이 완성되지 않았어요.")
 
+    def job_speakers(job, turns=None):
+        turns = load_turns(job["id"]) if turns is None else turns
+        voiced = load_embeddings(store.path(job["id"]))
+        return speaker_list(turns, job.get("speaker_names") or {}, job.get("auto_speakers"), voiced)
+
+    def load_questions(job_id):
+        path = store.path(job_id) / "questions.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+    def require_template(template):
+        if template not in TEMPLATES:
+            raise HTTPException(400, "없는 양식이에요.")
+
+    @app.get("/api/templates")
+    def list_templates():
+        return [
+            {"key": key, "label": template["label"], "description": template["description"]}
+            for key, template in TEMPLATES.items()
+        ]
+
+    @app.get("/api/search")
+    def search(q: str = ""):
+        pattern = search_pattern(q[:100])
+        if pattern is None:
+            return []
+        results = []
+        for job in store.all():
+            if job["status"] != "done":
+                continue
+            turns = load_turns(job["id"])
+            speakers = job_speakers(job, turns)
+            names = {speaker["label"]: speaker["name"] for speaker in speakers}
+            title = apply_speaker_names(job.get("title") or job["name"], speakers)
+            notes = plain_text(apply_speaker_names((store.path(job["id"]) / "notes.md").read_text(encoding="utf-8"), speakers))
+            hits = [
+                {"start": turn["start"], "speaker": names.get(turn["speaker"], ""), "text": snippet(turn["text"], found)}
+                for turn in turns
+                if (found := pattern.search(turn["text"]))
+            ]
+            in_notes = pattern.search(notes)
+            if not (hits or in_notes or pattern.search(title)):
+                continue
+            results.append(
+                {
+                    "id": job["id"],
+                    "title": title,
+                    "created_at": job["created_at"],
+                    "duration_seconds": job["duration_seconds"],
+                    "notes": snippet(notes, in_notes) if in_notes else None,
+                    "hits": hits[:3],
+                    "hit_count": len(hits),
+                }
+            )
+        return results
+
+    @app.get("/api/voices")
+    def list_voices():
+        return voices.list()
+
+    @app.delete("/api/voices/{voice_id}")
+    def delete_voice(voice_id: str):
+        if not voices.delete(voice_id):
+            raise HTTPException(404, "등록된 목소리를 찾을 수 없어요.")
+        return {"ok": True}
+
+    @app.get("/api/push/key")
+    def push_key():
+        return {"key": push.public_key()}
+
+    @app.post("/api/push/subscribe")
+    def push_subscribe(body: PushSubscription):
+        push.subscribe(body.model_dump())
+        return {"ok": True}
+
+    @app.post("/api/push/unsubscribe")
+    def push_unsubscribe(body: PushEndpoint):
+        push.unsubscribe(body.endpoint)
+        return {"ok": True}
+
     @app.get("/api/jobs")
     def list_jobs():
         return public_jobs(store)
 
-    def register_upload(job_id, name, suffix, incoming):
+    def register_upload(job_id, name, suffix, incoming, template):
         """올라온 파일이 오디오인지 확인하고 처리 대기열에 넣는다."""
         audio = incoming.with_name(f"audio{suffix}")
         os.replace(incoming, audio)
@@ -360,6 +544,7 @@ def create_app(data_dir="jobs", process=default_process):
             "duration_seconds": duration,
             "error": None,
             "confirmed_at": None,
+            "template": template,
         }
         store.write(job)
         worker.queue.put(job_id)
@@ -369,6 +554,8 @@ def create_app(data_dir="jobs", process=default_process):
     async def create_job(request: Request):
         # 웹 화면은 양식으로 보내고, 아이폰 단축어는 파일을 본문 그대로 보낼 수 있다.
         content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        template = request.query_params.get("template", DEFAULT_TEMPLATE)
+        require_template(template)
         job_id = uuid.uuid4().hex
         job_dir = store.path(job_id)
         job_dir.mkdir()
@@ -395,7 +582,7 @@ def create_app(data_dir="jobs", process=default_process):
                         if copied > MAX_UPLOAD_BYTES:
                             raise HTTPException(413, TOO_LARGE_MESSAGE)
                         out.write(chunk)
-            return await run_in_threadpool(register_upload, job_id, name, suffix, incoming)
+            return await run_in_threadpool(register_upload, job_id, name, suffix, incoming, template)
         except Exception:
             logger.warning("업로드를 거절했다: content_type=%s", content_type)
             shutil.rmtree(job_dir)
@@ -409,8 +596,10 @@ def create_app(data_dir="jobs", process=default_process):
         if view["status"] == "done":
             view["notes"] = (job_dir / "notes.md").read_text(encoding="utf-8")
             view["turns"] = load_turns(job_id)
-            view["speakers"] = speaker_list(view["turns"], job.get("speaker_names") or {})
+            view["speakers"] = job_speakers(job, view["turns"])
             view["edited"] = (job_dir / "notes.draft.md").exists()
+            view["template"] = job.get("template", DEFAULT_TEMPLATE)
+            view["questions"] = load_questions(job_id)
         return view
 
     @app.put("/api/jobs/{job_id}/notes")
@@ -436,12 +625,53 @@ def create_app(data_dir="jobs", process=default_process):
         name = " ".join(body.name.split())
         if FORBIDDEN_NAME_CHARS.search(name):
             raise HTTPException(400, "이름에 | * [ ] 기호는 쓸 수 없어요.")
+        if body.remember and name:
+            embedding = load_embeddings(store.path(job_id)).get(label)
+            if embedding is None:
+                raise HTTPException(409, "이 회의에는 목소리 정보가 없어요. 새로 올린 녹음부터 등록할 수 있어요.")
+            voices.register(name, embedding)
         names = dict(job.get("speaker_names") or {})
         if name:
             names[label] = name
         else:
             names.pop(label, None)
-        store.update(job_id, speaker_names=names, confirmed_at=None)
+        auto = {key: value for key, value in (job.get("auto_speakers") or {}).items() if key != label}
+        store.update(job_id, speaker_names=names, auto_speakers=auto, confirmed_at=None)
+        return read_job(job_id)
+
+    @app.post("/api/jobs/{job_id}/ask")
+    def ask(job_id: str, body: Question):
+        job = get_job(job_id)
+        require_done(job)
+        from meeting_notes import format_transcript
+
+        turns = load_turns(job_id)
+        speakers = job_speakers(job, turns)
+        transcript = apply_speaker_names(format_transcript(turns), speakers)
+        notes = apply_speaker_names((store.path(job_id) / "notes.md").read_text(encoding="utf-8"), speakers)
+        question = body.question.strip()
+        try:
+            text = answer(transcript, notes, question)
+        except Exception as error:
+            logger.error("작업 %s 질문에 답하지 못했다", job_id, exc_info=error)
+            raise HTTPException(502, "답을 받지 못했어요. 잠시 후 다시 시도해 주세요.") from error
+        item = {"question": question, "answer": text, "asked_at": now()}
+        questions = load_questions(job_id) + [item]
+        (store.path(job_id) / "questions.json").write_text(json.dumps(questions, ensure_ascii=False), encoding="utf-8")
+        return item
+
+    @app.post("/api/jobs/{job_id}/regenerate")
+    def regenerate(job_id: str, body: Regenerate):
+        job = get_job(job_id)
+        require_done(job)
+        require_template(body.template)
+        if worker.is_running(job_id):
+            raise HTTPException(409, STILL_STOPPING_MESSAGE)
+        job_dir = store.path(job_id)
+        shutil.copyfile(job_dir / "notes.md", job_dir / "notes.previous.md")
+        (job_dir / "notes.draft.md").unlink(missing_ok=True)
+        store.update(job_id, status="queued", template=body.template, confirmed_at=None, error=None)
+        worker.queue.put(job_id)
         return read_job(job_id)
 
     @app.post("/api/jobs/{job_id}/confirm")
@@ -488,7 +718,7 @@ def create_app(data_dir="jobs", process=default_process):
     def download(job_id: str):
         job = get_job(job_id)
         require_done(job)
-        speakers = speaker_list(load_turns(job_id), job.get("speaker_names") or {})
+        speakers = job_speakers(job)
         notes = (store.path(job_id) / "notes.md").read_text(encoding="utf-8")
         title = apply_speaker_names(job["title"] or job["name"], speakers)
         safe_title = re.sub(r'[\\/:*?"<>|\r\n]', "_", title)[:80]
@@ -497,6 +727,11 @@ def create_app(data_dir="jobs", process=default_process):
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(f'회의록 {safe_title}.md')}"},
         )
+
+    @app.get("/sw.js")
+    def service_worker():
+        # 서비스 워커는 범위를 넓게 쓰기 위해 최상위 경로에서 내보낸다.
+        return FileResponse(STATIC_DIR / "sw.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
 
     @app.get("/")
     def index():
