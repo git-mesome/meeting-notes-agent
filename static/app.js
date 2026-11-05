@@ -28,10 +28,6 @@ class ApiError extends Error {}
 async function api(path, options = {}) {
   const response = await fetch(path, options);
   const body = await response.json().catch(() => ({}));
-  if (response.status === 401 && path !== "/api/login") {
-    renderLogin();
-    throw new ApiError(body.detail || "접속 코드를 입력하세요.");
-  }
   if (!response.ok) {
     const detail = typeof body.detail === "string" ? body.detail : "요청을 처리하지 못했습니다. 다시 시도하세요.";
     throw new ApiError(detail);
@@ -121,52 +117,6 @@ function setScreen(wide = false) {
   window.scrollTo(0, 0);
 }
 
-/* 로그인 */
-
-function renderLogin() {
-  setScreen();
-  const input = el("input", {
-    id: "code",
-    type: "password",
-    autocomplete: "current-password",
-    required: true,
-  });
-  const alert = el("p", { class: "alert", role: "alert" });
-  const button = el("button", { class: "button primary", type: "submit", text: "들어가기" });
-  const form = el(
-    "form",
-    {
-      onsubmit: async (event) => {
-        event.preventDefault();
-        button.disabled = true;
-        alert.textContent = "";
-        try {
-          await api("/api/login", jsonOptions("POST", { code: input.value }));
-          route();
-        } catch (error) {
-          alert.textContent = error.message;
-          button.disabled = false;
-          input.select();
-        }
-      },
-    },
-    el("label", { for: "code", text: "접속 코드" }),
-    input,
-    button,
-    alert,
-  );
-  root.append(
-    el(
-      "div",
-      { class: "login" },
-      el("h1", { text: "회의록" }),
-      el("p", { text: "회의 녹음을 올리면 회의록 초안을 만듭니다." }),
-      form,
-    ),
-  );
-  input.focus();
-}
-
 /* 목록 */
 
 function uploadSection(onUploaded) {
@@ -211,8 +161,6 @@ function uploadSection(onUploaded) {
       finish();
       if (request.status === 201) {
         onUploaded();
-      } else if (request.status === 401) {
-        renderLogin();
       } else {
         const detail = request.response && request.response.detail;
         alert.textContent = typeof detail === "string" ? detail : "파일을 올리지 못했습니다. 다시 시도하세요.";
@@ -270,17 +218,8 @@ async function renderList() {
     );
     if (jobs.some(isActive)) pollTimer = setTimeout(refresh, POLL_MS);
   };
-  const logout = async () => {
-    await api("/api/logout", { method: "POST" });
-    renderLogin();
-  };
   root.append(
-    el(
-      "header",
-      { class: "masthead" },
-      el("h1", { text: "회의록" }),
-      el("button", { class: "text-button", type: "button", text: "나가기", onclick: logout }),
-    ),
+    el("header", { class: "masthead" }, el("h1", { text: "회의록" })),
     uploadSection(refresh),
     list,
   );
@@ -714,7 +653,7 @@ async function route() {
     if (job.status === "done") renderDetail(job);
     else renderWaiting(job);
   } catch (error) {
-    if (!(error instanceof ApiError) || root.querySelector(".login")) return;
+    if (!(error instanceof ApiError)) return;
     setScreen();
     root.append(
       el("a", { class: "back", href: "#/", text: "목록으로" }),

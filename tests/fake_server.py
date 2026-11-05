@@ -55,8 +55,4 @@ def fake_process(_audio, out_dir, on_stage):
 
 
 def create():
-    return create_app(
-        data_dir=os.environ.get("FAKE_DATA_DIR", "jobs-fake"),
-        access_code=os.environ.get("ACCESS_CODE", "test-code"),
-        process=fake_process,
-    )
+    return create_app(data_dir=os.environ.get("FAKE_DATA_DIR", "jobs-fake"), process=fake_process)

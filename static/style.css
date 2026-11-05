@@ -101,16 +101,6 @@ a {
   font: 700 2.1rem/1.2 var(--serif);
 }
 
-.text-button {
-  min-height: 44px;
-  padding: 0 0.25rem;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  text-decoration: underline;
-  text-underline-offset: 0.2em;
-}
-
 /* 버튼 */
 .button {
   display: inline-flex;
@@ -134,42 +124,6 @@ a {
 .button:disabled {
   opacity: 0.55;
   cursor: default;
-}
-
-/* 로그인 */
-.login {
-  max-width: 22rem;
-  margin: 18vh auto 0;
-}
-
-.login h1 {
-  margin: 0;
-  font: 700 2.6rem/1.2 var(--serif);
-}
-
-.login > p {
-  margin: 0.5rem 0 2rem;
-  color: var(--muted);
-}
-
-.login label {
-  display: block;
-  margin-bottom: 0.35rem;
-  font-weight: 500;
-}
-
-.login input {
-  width: 100%;
-  min-height: 48px;
-  margin-bottom: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--ink);
-  border-radius: 3px;
-  background: var(--sheet);
-}
-
-.login .button {
-  width: 100%;
 }
 
 .alert {

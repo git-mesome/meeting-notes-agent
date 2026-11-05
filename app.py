@@ -3,8 +3,6 @@
 실행: uv run --env-file .env uvicorn app:create_app --factory
 """
 
-import hashlib
-import hmac
 import json
 import logging
 import os
@@ -13,24 +11,26 @@ import re
 import shutil
 import subprocess
 import threading
-import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 logger = logging.getLogger("meeting_notes.app")
 
 STATIC_DIR = Path(__file__).parent / "static"
 ALLOWED_SUFFIXES = {".m4a", ".mp3", ".wav", ".flac", ".ogg", ".aac", ".mp4", ".webm"}
 MAX_UPLOAD_BYTES = 1024**3
-COOKIE_NAME = "session"
-COOKIE_MAX_AGE = 30 * 24 * 3600
+# 로그인이 없으므로 서버는 127.0.0.1에만 열고 Tailscale로만 중계한다.
+ALLOWED_HOSTS = ["127.0.0.1", "localhost", "*.ts.net"]
+READ_ONLY_METHODS = {"GET", "HEAD", "OPTIONS"}
 JOB_ID = re.compile(r"[0-9a-f]{32}")
 ACTIVE_STATUSES = ("queued", "transcribing", "writing")
 
@@ -186,20 +186,11 @@ def public_jobs(store):
     return [public_job(job, position.get(job["id"], 0)) for job in jobs]
 
 
-class Login(BaseModel):
-    code: str = Field(max_length=200)
-
-
 class NotesUpdate(BaseModel):
     notes: str = Field(min_length=1, max_length=1_000_000)
 
 
-def create_app(data_dir="jobs", access_code=None, process=default_process):
-    access_code = access_code or os.environ.get("ACCESS_CODE")
-    if not access_code:
-        raise RuntimeError("ACCESS_CODE 환경 변수가 필요하다. .env에 접속 코드를 넣는다.")
-    session_token = hmac.new(access_code.encode(), b"meeting-notes-session", hashlib.sha256).hexdigest()
-
+def create_app(data_dir="jobs", process=default_process):
     store = JobStore(data_dir)
     worker = Worker(store, process)
 
@@ -214,15 +205,15 @@ def create_app(data_dir="jobs", access_code=None, process=default_process):
         yield
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
-        # 본문을 읽기 전에 막아야 하므로 의존성이 아니라 미들웨어에서 확인한다.
+        # 다른 웹사이트가 브라우저를 통해 보내는 쓰기 요청을 본문을 읽기 전에 막는다.
+        origin = request.headers.get("origin")
+        if request.method not in READ_ONLY_METHODS and origin and urlsplit(origin).netloc != request.headers.get("host"):
+            return JSONResponse({"detail": "다른 사이트에서 보낸 요청은 처리하지 않습니다."}, status_code=403)
         path = request.url.path
-        if path.startswith("/api/") and path != "/api/login":
-            cookie = request.cookies.get(COOKIE_NAME, "")
-            if not hmac.compare_digest(cookie.encode(), session_token.encode()):
-                return JSONResponse({"detail": "접속 코드를 입력하세요."}, status_code=401)
         response = await call_next(request)
         response.headers.update(SECURITY_HEADERS)
         if path.startswith("/api/") or path == "/":
@@ -238,26 +229,6 @@ def create_app(data_dir="jobs", access_code=None, process=default_process):
     def require_done(job):
         if job["status"] != "done":
             raise HTTPException(409, "아직 회의록이 완성되지 않았습니다.")
-
-    @app.post("/api/login")
-    def login(body: Login, request: Request, response: Response):
-        if not hmac.compare_digest(body.code.encode(), access_code.encode()):
-            time.sleep(1)
-            raise HTTPException(401, "접속 코드가 맞지 않습니다. 다시 입력하세요.")
-        response.set_cookie(
-            COOKIE_NAME,
-            session_token,
-            max_age=COOKIE_MAX_AGE,
-            httponly=True,
-            samesite="strict",
-            secure=request.url.scheme == "https",
-        )
-        return {"ok": True}
-
-    @app.post("/api/logout")
-    def logout(response: Response):
-        response.delete_cookie(COOKIE_NAME)
-        return {"ok": True}
 
     @app.get("/api/jobs")
     def list_jobs():
