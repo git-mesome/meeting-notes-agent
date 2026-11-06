@@ -1,4 +1,4 @@
-from meeting_notes import format_time, format_transcript, is_hallucination, to_turns
+from meeting_notes import fix_spelling, format_time, format_transcript, is_hallucination, to_turns
 
 
 def word(text, start, end, speaker=None):
@@ -6,6 +6,12 @@ def word(text, start, end, speaker=None):
     if speaker:
         item["speaker"] = speaker
     return item
+
+
+def test_ai_is_always_written_as_ai():
+    assert fix_spelling("에이아이 회사, 생성형에이아이 도입") == "AI 회사, 생성형AI 도입"
+    segment = {"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00", "words": [word("에이아이로", 0.0, 1.0), word("정리", 1.0, 2.0)]}
+    assert to_turns([segment])[0]["text"] == "AI로 정리"
 
 
 def test_splits_segment_where_word_speaker_changes():

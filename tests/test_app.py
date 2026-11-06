@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import threading
 import time
@@ -45,7 +46,7 @@ def client(tmp_path):
 
 
 def wait_for(client, job_id, *statuses):
-    deadline = time.time() + 5
+    deadline = time.time() + 20
     while time.time() < deadline:
         job = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] in statuses:
@@ -175,6 +176,12 @@ def test_upload_name_cannot_escape_job_folder(client, tone, tmp_path):
 @pytest.mark.parametrize("job_id", ["..", "nope", "0" * 32])
 def test_unknown_job_is_not_found(client, job_id):
     assert client.get(f"/api/jobs/{job_id}").status_code == 404
+
+
+def test_edited_notes_keep_ai_spelling(client, tone):
+    job_id = wait_for(client, upload(client, tone), "done")["id"]
+    updated = client.put(f"/api/jobs/{job_id}/notes", json={"notes": "# 회의록: 에이아이 도입\n"}).json()
+    assert updated["title"] == "AI 도입" and "에이아이" not in updated["notes"]
 
 
 def test_edit_keeps_draft_and_clears_confirmation(client, tone, tmp_path):
@@ -476,6 +483,18 @@ def test_security_headers_and_no_store(client):
     assert response.headers["cache-control"] == "no-store"
     assert "default-src 'self'" in response.headers["content-security-policy"]
     assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_index_points_to_current_app_files(client):
+    html = client.get("/").text
+    for name in ("app.js", "style.css"):
+        match = re.search(rf'"(/static/{name}\?v=[0-9a-f]{{12}})"', html)
+        assert match and client.get(match.group(1)).status_code == 200
+
+
+def test_static_files_are_revalidated(client):
+    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
+    assert client.get("/sw.js").headers["cache-control"] == "no-cache"
 
 
 def test_index_is_served(client):

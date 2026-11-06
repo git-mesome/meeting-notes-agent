@@ -1,0 +1,17 @@
+# 회사 설정 예시. 이 폴더를 company/로 복사한 뒤 값을 바꾼다.
+# company/는 커밋하지 않는다. 다른 위치를 쓰려면 환경 변수 COMPANY_DIR에 경로를 적는다.
+
+[server]
+# 접속을 허용할 Host. Tailscale로 핸드폰에서 접속하려면 "*.ts.net"이 있어야 한다.
+allowed_hosts = ["127.0.0.1", "localhost", "*.ts.net"]
+
+[spelling]
+# 전사문, 회의록, 질문 답변, 이슈 초안에서 항상 바꿀 표기. "에이아이" → "AI"는 기본으로 들어 있다.
+# "쿠버네티스" = "Kubernetes"
+
+[tracker]
+# 이슈 트래커 어댑터 파일 이름(.py 제외). 이 폴더에 둔다. [tracker]를 지우면 이슈 등록 버튼이 보이지 않는다.
+module = "example_tracker"
+# 아래 값은 어댑터의 create(settings)가 읽는다. 토큰은 여기 말고 .env에 둔다.
+people = ["홍길동", "홍길순"]
+tags = ["백엔드", "화면"]

@@ -159,8 +159,9 @@ def test_knowledge_is_empty_without_files(tmp_path):
 
 
 def test_write_notes_sends_knowledge_before_transcript(tmp_path, monkeypatch):
-    write_knowledge(tmp_path)
-    monkeypatch.setattr(meeting_notes, "KNOWLEDGE_DIR", tmp_path)
+    (tmp_path / "knowledge").mkdir()
+    write_knowledge(tmp_path / "knowledge")
+    monkeypatch.setattr(meeting_notes.company, "current", lambda: meeting_notes.company.Company(tmp_path))
     captured = {}
 
     class Stream:

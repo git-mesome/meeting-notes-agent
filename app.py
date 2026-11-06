@@ -3,6 +3,7 @@
 실행: uv run --env-file .env uvicorn app:create_app --factory
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -12,21 +13,24 @@ import shutil
 import subprocess
 import threading
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+import company
 from note_templates import DEFAULT_TEMPLATE, TEMPLATES
 from push import PushCenter
+from trackers import TrackerError
 from voices import VoiceBook, write_private
 
 logger = logging.getLogger("meeting_notes.app")
@@ -47,7 +51,6 @@ RAW_SUFFIXES = {
     "audio/webm": ".webm",
 }
 # 로그인이 없으므로 서버는 127.0.0.1에만 열고 Tailscale로만 중계한다.
-ALLOWED_HOSTS = ["127.0.0.1", "localhost", "*.ts.net"]
 READ_ONLY_METHODS = {"GET", "HEAD", "OPTIONS"}
 JOB_ID = re.compile(r"[0-9a-f]{32}")
 SPEAKER_LABEL = re.compile(r"SPEAKER_\d+")
@@ -57,6 +60,9 @@ ACTIVE_STATUSES = ("queued", "transcribing", "writing")
 
 # 노트북 CPU에서 large-v3로 잰 값이다. 음성 1초를 처리하는 데 2.2~2.7초가 걸렸다.
 SECONDS_PER_AUDIO_SECOND = 2.5
+ISSUE_SUMMARY_CHARS = 400
+DRAFTS_FILE = "issue_drafts.json"
+MAX_DESCRIBED_ISSUES = 60
 
 FAILURE_MESSAGES = {
     "transcribing": "음성을 글로 옮기지 못했어요. 다시 시도해 주세요.",
@@ -121,12 +127,48 @@ def copy_upload(source, target):
 
 
 def default_process(audio, out_dir, on_stage, on_process):
-    from meeting_notes import load_glossary, process_audio
+    from meeting_notes import process_audio
 
-    glossary_path = Path("glossary.txt")
-    glossary = load_glossary(glossary_path) if glossary_path.exists() else []
+    glossary = company.current().glossary
     template = json.loads((out_dir / "meta.json").read_text(encoding="utf-8")).get("template", DEFAULT_TEMPLATE)
     return process_audio(audio, out_dir, glossary, on_stage, on_process, template)
+
+
+def default_draft(meeting, actions, space, rules):
+    from meeting_notes import draft_issues
+
+    return draft_issues(meeting, actions, space, rules)
+
+
+def issue_summaries(tracker, issues):
+    """열린 이슈마다 설명 앞부분을 가져온다. 제목만으로는 회의의 할 일과 같은 일인지 알기 어렵다."""
+
+    def summary(issue):
+        try:
+            detail = tracker.issue(issue["key"])
+        except (TrackerError, OSError):
+            return ""
+        description = detail.get("description") if isinstance(detail, dict) else ""
+        return (description or "")[:ISSUE_SUMMARY_CHARS]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        found = list(pool.map(summary, issues[:MAX_DESCRIBED_ISSUES]))
+    return found + [""] * (len(issues) - len(found))
+
+
+def action_items(notes):
+    """회의록의 액션 아이템 표를 행 목록으로 읽는다."""
+    section = re.search(r"^## 액션 아이템\s*$(.*?)(?=^## |\Z)", notes, re.M | re.S)
+    if not section:
+        return []
+    rows = []
+    for line in section.group(1).splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if not line.strip().startswith("|") or len(cells) < 2 or cells[0] == "담당" or set("".join(cells)) <= set("-: "):
+            continue
+        cells += [""] * (4 - len(cells))
+        rows.append({"index": len(rows), "owner": cells[0], "task": cells[1], "due": cells[2], "evidence": cells[3]})
+    return rows
 
 
 def default_answer(transcript, notes, question):
@@ -388,6 +430,29 @@ class Regenerate(BaseModel):
     template: str
 
 
+class IssueDraft(BaseModel):
+    source: int
+    title: str = Field(min_length=2, max_length=200)
+    description: str = Field(min_length=1, max_length=20_000)
+    category: str = Field(default="", max_length=40)
+    priority: str = Field(default="", max_length=40)
+    assignees: list[str] = Field(default_factory=list, max_length=20)
+    tags: list[str] = Field(default_factory=list, max_length=8)
+    parent: str = Field(default="", max_length=40)
+    due_date: str = Field(default="", pattern=r"^(\d{4}-\d{2}-\d{2})?$")
+
+
+class IssueComment(BaseModel):
+    source: int
+    key: str = Field(pattern=r"^[A-Za-z0-9#._-]{1,40}$")
+    text: str = Field(min_length=1, max_length=10_000)
+
+
+class IssueRegistration(BaseModel):
+    create: list[IssueDraft] = Field(default_factory=list, max_length=20)
+    comments: list[IssueComment] = Field(default_factory=list, max_length=20)
+
+
 class PushKeys(BaseModel):
     p256dh: str = Field(max_length=300)
     auth: str = Field(max_length=100)
@@ -402,7 +467,11 @@ class PushEndpoint(BaseModel):
     endpoint: str = Field(max_length=1000)
 
 
-def create_app(data_dir="jobs", process=default_process, answer=default_answer, push_send=None):
+def create_app(
+    data_dir="jobs", process=default_process, answer=default_answer, push_send=None, tracker="company", draft=default_draft
+):
+    # 이슈 트래커는 회사 폴더의 어댑터로 만든다. 테스트에서는 객체를 직접 넘긴다.
+    tracker = company.current().tracker() if tracker == "company" else tracker
     store = JobStore(data_dir)
     voices = VoiceBook(data_dir)
     push = PushCenter(data_dir, send=push_send)
@@ -419,7 +488,7 @@ def create_app(data_dir="jobs", process=default_process, answer=default_answer, 
         yield
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=company.current().allowed_hosts)
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -432,6 +501,9 @@ def create_app(data_dir="jobs", process=default_process, answer=default_answer, 
         response.headers.update(SECURITY_HEADERS)
         if path.startswith("/api/") or path == "/":
             response.headers["Cache-Control"] = "no-store"
+        elif path.startswith("/static/") or path == "/sw.js":
+            # 홈 화면 앱이 서버를 고친 뒤에도 예전 화면을 쓰지 않도록 매번 바뀌었는지 확인하게 한다.
+            response.headers["Cache-Control"] = "no-cache"
         return response
 
     def get_job(job_id):
@@ -501,6 +573,147 @@ def create_app(data_dir="jobs", process=default_process, answer=default_answer, 
                 }
             )
         return results
+
+    def require_tracker():
+        if tracker is None:
+            raise HTTPException(409, "이슈 트래커가 설정되어 있지 않아요.")
+
+    def with_urls(items):
+        return [{**item, "url": tracker.issue_url(item["key"]) if tracker else ""} for item in items]
+
+    @app.get("/api/tracker")
+    def tracker_status():
+        if tracker is None:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "name": tracker.name,
+            "destination": tracker.destination,
+            "after_register": tracker.after_register,
+        }
+
+    drafting = {}
+    drafting_lock = threading.Lock()
+
+    def make_drafts(job, notes, actions):
+        try:
+            people, tags, issues = tracker.people(), tracker.tags(), tracker.open_issues()
+        except (TrackerError, OSError) as error:
+            logger.error("이슈 트래커 조회에 실패했다", exc_info=error)
+            raise HTTPException(502, f"{tracker.name}에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.") from error
+        epics = [{"key": issue["key"], "title": issue["title"]} for issue in issues if issue.get("type") == "epic"]
+        summaries = issue_summaries(tracker, issues)
+        space = {
+            "people": people,
+            "tags": tags,
+            "epics": epics,
+            "open_issues": [
+                {**{key: issue.get(key) for key in ("key", "title", "type", "status", "tags", "assignees")}, "summary": summary}
+                for issue, summary in zip(issues, summaries)
+            ],
+        }
+        rules = {"categories": tracker.categories, "priorities": tracker.priorities, "guide": tracker.guide}
+        meeting = {"title": job.get("title") or job["name"], "date": job["created_at"][:10], "notes": notes}
+        try:
+            drafts = draft(meeting, actions, space, rules)
+        except Exception as error:
+            logger.error("작업 %s 이슈 초안 생성에 실패했다", job["id"], exc_info=error)
+            raise HTTPException(502, "이슈 초안을 만들지 못했어요. 잠시 후 다시 시도해 주세요.") from error
+        known = {issue["key"]: issue["title"] for issue in issues}
+        for item in drafts:
+            item["tags"] = [tag for tag in item["tags"] if tag in tags]
+            item["assignees"] = [person for person in item["assignees"] if person in people]
+            item["parent"] = item["parent"] if item["parent"] in known else ""
+            item["category"] = item.get("category") if item.get("category") in tracker.categories else ""
+            item["priority"] = item.get("priority") if item.get("priority") in tracker.priorities else ""
+            if item["action"] == "comment" and item["existing_key"] not in known:
+                item["action"] = "create"
+            item["existing_title"] = known.get(item["existing_key"], "")
+        return {
+            "actions": actions,
+            "drafts": drafts,
+            "people": people,
+            "tags": tags,
+            "epics": epics,
+            "issues": [{"key": issue["key"], "title": issue["title"]} for issue in issues],
+        }
+
+    @app.post("/api/jobs/{job_id}/issues/drafts")
+    def issue_drafts(job_id: str, refresh: bool = False):
+        job = get_job(job_id)
+        require_done(job)
+        require_tracker()
+        speakers = job_speakers(job)
+        notes = apply_speaker_names((store.path(job_id) / "notes.md").read_text(encoding="utf-8"), speakers)
+        actions = action_items(notes)
+        if not actions:
+            raise HTTPException(400, "회의록에 등록할 할 일이 없어요.")
+        # 만든 초안은 저장해 두고, 회의록이나 화자 이름이 바뀌었을 때만 새로 만든다.
+        fingerprint = hashlib.sha256(notes.encode()).hexdigest()
+        cache = store.path(job_id) / DRAFTS_FILE
+        try:
+            saved = json.loads(cache.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            saved = None
+        if refresh or not saved or saved.get("fingerprint") != fingerprint:
+            # 창을 닫았다 다시 열어도 초안을 두 번 만들지 않도록, 만드는 중이면 그 결과를 함께 기다린다.
+            with drafting_lock:
+                future = drafting.get(job_id)
+                owner = future is None
+                if owner:
+                    future = drafting[job_id] = Future()
+            if owner:
+                try:
+                    saved = {"fingerprint": fingerprint, "drafted_at": now(), **make_drafts(job, notes, actions)}
+                    cache.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
+                    future.set_result(saved)
+                except BaseException as error:
+                    future.set_exception(error)
+                finally:
+                    with drafting_lock:
+                        drafting.pop(job_id, None)
+            saved = future.result()
+        body = {key: value for key, value in saved.items() if key != "fingerprint"}
+        return {**body, "registered": with_urls(job.get("issues") or [])}
+
+    @app.post("/api/jobs/{job_id}/issues")
+    def register_issues(job_id: str, body: IssueRegistration):
+        job = get_job(job_id)
+        require_done(job)
+        require_tracker()
+        if not body.create and not body.comments:
+            raise HTTPException(400, "등록할 항목을 골라 주세요.")
+        for item in body.create:
+            if item.category not in (tracker.categories or [""]) or item.priority not in (tracker.priorities or [""]):
+                raise HTTPException(422, "분류나 우선순위가 이 트래커에 없는 값이에요.")
+        results = []
+        try:
+            if body.create:
+                payload = []
+                for item in body.create:
+                    issue = item.model_dump(exclude={"source"})
+                    payload.append({key: value for key, value in issue.items() if value not in ("", [])})
+                keys = tracker.create(payload)
+                if len(keys) != len(payload):
+                    logger.warning("작업 %s: 이슈 %d건을 등록했는데 키는 %d개만 받았다", job_id, len(payload), len(keys))
+                for item, key in zip(body.create, keys):
+                    results.append({"source": item.source, "kind": "create", "key": key, "title": item.title})
+            for comment in body.comments:
+                tracker.comment(comment.key, comment.text)
+                results.append({"source": comment.source, "kind": "comment", "key": comment.key, "title": ""})
+        except (TrackerError, OSError) as error:
+            logger.error("작업 %s 이슈 등록에 실패했다", job_id, exc_info=error)
+            if not results:
+                raise HTTPException(502, f"{tracker.name}에 등록하지 못했어요: {error}") from error
+            store.update(job_id, issues=(job.get("issues") or []) + [{**r, "at": now()} for r in results])
+            raise HTTPException(
+                502,
+                f"{len(results)}건은 등록했지만 나머지는 등록하지 못했어요: {error}. "
+                f"{tracker.name}에서 확인한 뒤 다시 시도해 주세요.",
+            ) from error
+        registered = (job.get("issues") or []) + [{**result, "at": now()} for result in results]
+        store.update(job_id, issues=registered)
+        return {"results": with_urls(results), "registered": with_urls(registered)}
 
     @app.get("/api/voices")
     def list_voices():
@@ -590,22 +803,28 @@ def create_app(data_dir="jobs", process=default_process, answer=default_answer, 
 
     @app.get("/api/jobs/{job_id}")
     def read_job(job_id: str):
-        job = get_job(job_id)
+        get_job(job_id)
         view = next(view for view in public_jobs(store) if view["id"] == job_id)
         job_dir = store.path(job_id)
         if view["status"] == "done":
+            # 목록을 읽기 전에 읽은 상태를 쓰면, 그 사이에 끝난 작업의 화자 이름이 빠진다.
+            job = get_job(job_id)
             view["notes"] = (job_dir / "notes.md").read_text(encoding="utf-8")
             view["turns"] = load_turns(job_id)
             view["speakers"] = job_speakers(job, view["turns"])
             view["edited"] = (job_dir / "notes.draft.md").exists()
             view["template"] = job.get("template", DEFAULT_TEMPLATE)
             view["questions"] = load_questions(job_id)
+            view["issues"] = with_urls(job.get("issues") or [])
         return view
 
     @app.put("/api/jobs/{job_id}/notes")
     def update_notes(job_id: str, body: NotesUpdate):
+        from meeting_notes import fix_spelling
+
         job = get_job(job_id)
         require_done(job)
+        body.notes = fix_spelling(body.notes)
         notes_path = store.path(job_id) / "notes.md"
         draft_path = store.path(job_id) / "notes.draft.md"
         if not draft_path.exists():
@@ -735,7 +954,12 @@ def create_app(data_dir="jobs", process=default_process, answer=default_answer, 
 
     @app.get("/")
     def index():
-        return FileResponse(STATIC_DIR / "index.html")
+        # 파일 내용이 바뀌면 주소도 바뀌게 해서, 브라우저가 저장해 둔 예전 화면 코드를 쓰지 않게 한다.
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        for name in ("style.css", "app.js"):
+            version = hashlib.sha256((STATIC_DIR / name).read_bytes()).hexdigest()[:12]
+            html = html.replace(f'"/static/{name}"', f'"/static/{name}?v={version}"')
+        return HTMLResponse(html)
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

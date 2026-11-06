@@ -1,0 +1,14 @@
+[
+  {
+    "term": "배포 파이프라인",
+    "term_en": "Deployment Pipeline",
+    "aliases": ["CD"],
+    "definition": "코드를 빌드하고 시험한 뒤 서버에 올리기까지의 자동화된 단계."
+  },
+  {
+    "term": "장애 보고서",
+    "term_en": "Postmortem",
+    "aliases": ["포스트모템"],
+    "definition": "장애의 원인, 영향, 재발 방지 대책을 정리한 문서."
+  }
+]

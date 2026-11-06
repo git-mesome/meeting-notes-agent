@@ -8,6 +8,7 @@ import os
 import time
 
 from app import create_app
+from trackers import Tracker
 
 SAMPLE_NOTES = """# 회의록: 3분기 방화벽 교체 일정 점검
 
@@ -63,5 +64,54 @@ def fake_process(_audio, out_dir, on_stage, _on_process):
     return {"input_tokens": 0, "output_tokens": 0}
 
 
+class FakeTracker(Tracker):
+    name = "예시 보드"
+    destination = "TEAM 보드"
+    categories = ["기능", "버그"]
+    priorities = ["보통", "낮음"]
+    after_register = "보드에서 진행 상황을 확인해요."
+
+    def people(self):
+        return ["박지훈", "김철수"]
+
+    def tags(self):
+        return ["플랫폼", "도구"]
+
+    def open_issues(self):
+        return [
+            {"key": "PLT-1", "title": "장비 교체 작업", "type": "epic", "status": "진행 중", "tags": ["플랫폼"], "assignees": []},
+            {"key": "PLT-2", "title": "지점 작업 일정 관리", "type": "task", "status": "진행 중", "tags": ["플랫폼"], "assignees": []},
+        ]
+
+    def issue(self, key):
+        return {"key": key, "description": ""}
+
+    def issue_url(self, key):
+        return f"http://board.example/{key}"
+
+    def create(self, issues):
+        time.sleep(0.5)
+        return [f"PLT-{10 + i}" for i in range(len(issues))]
+
+    def comment(self, key, text):
+        pass
+
+
+def fake_draft(_meeting, actions, _space, _rules):
+    time.sleep(3)
+    return [
+        {"source": 0, "action": "create", "title": "본사 교체 작업 계획서 작성", "description": "## 배경\n- 회의 [01:05]\n\n## 요구사항\n- 본사 장비 교체 순서 정리\n\n## 완료 조건\n- [ ] 계획서 공유",
+         "category": "기능", "priority": "보통", "assignees": ["박지훈"], "tags": ["플랫폼"], "parent": "PLT-1", "due_date": "", "existing_key": "", "comment": "", "reason": ""},
+        {"source": 1, "action": "comment", "title": "", "description": "", "category": "기능", "priority": "보통", "assignees": [], "tags": [],
+         "parent": "", "due_date": "", "existing_key": "PLT-2", "comment": "지점 교체는 2주 간격으로 진행 [01:40]", "reason": ""},
+    ]
+
+
 def create():
-    return create_app(data_dir=os.environ.get("FAKE_DATA_DIR", "jobs-fake"), process=fake_process, answer=fake_answer)
+    return create_app(
+        data_dir=os.environ.get("FAKE_DATA_DIR", "jobs-fake"),
+        process=fake_process,
+        answer=fake_answer,
+        tracker=FakeTracker(),
+        draft=fake_draft,
+    )

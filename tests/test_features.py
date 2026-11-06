@@ -54,7 +54,7 @@ def client(tmp_path):
 
 
 def wait_done(client, job_id, status="done"):
-    deadline = time.time() + 5
+    deadline = time.time() + 20
     while time.time() < deadline:
         job = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] == status:
