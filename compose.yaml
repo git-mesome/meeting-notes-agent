@@ -1,0 +1,21 @@
+# 서버에 올릴 때 쓴다. 값은 같은 폴더의 .env에서 읽는다(README의 "서버에 올리기").
+services:
+  meeting-notes:
+    build: .
+    image: meeting-notes-agent
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      COMPANY_DIR: /company
+      HF_HOME: /models
+      WHISPER_THREADS: ${CPU_LIMIT:-8}
+      OMP_NUM_THREADS: ${CPU_LIMIT:-8}
+    # 다른 서비스와 같이 쓰는 서버에서 코어를 다 가져가지 않도록 묶는다.
+    cpus: ${CPU_LIMIT:-8}
+    ports:
+      # 로그인이 없으므로 기본은 서버 자신에서만 접속된다.
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:8000"
+    volumes:
+      - ${COMPANY_PATH:-./company}:/company:ro
+      - ${DATA_PATH:-./jobs}:/app/jobs
+      - ${MODELS_PATH:-./models}:/models

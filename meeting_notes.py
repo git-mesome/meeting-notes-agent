@@ -6,6 +6,7 @@
 
 import argparse
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -31,6 +32,8 @@ HALLUCINATIONS = {"감사합니다", "수고하셨습니다", "시청해주셔�
 # 말이 빠졌던 구간에서 전사된 시간이 40초에서 90초로 늘었다.
 NORMALIZE_FILTER = "highpass=f=80,dynaudnorm=f=150:g=15:p=0.95:m=30"
 VAD_OPTIONS = ["--vad_onset", "0.2", "--vad_offset", "0.15"]
+# 전사에 쓸 CPU 스레드 수. 노트북(i7-1360P)에서는 8이 가장 빨랐다. 서버에서는 배정한 코어 수에 맞춘다.
+DEFAULT_THREADS = 8
 
 ASK_PROMPT = """사내 회의의 전사문과 회의록을 근거로 사용자의 질문에 답한다.
 
@@ -65,7 +68,8 @@ def transcribe(audio, out_dir, glossary, on_process=lambda process: None):
     cmd = [
         "whisperx", str(source),
         "--model", "large-v3", "--language", "ko",
-        "--device", "cpu", "--compute_type", "int8", "--batch_size", "4", "--threads", "8",
+        "--device", "cpu", "--compute_type", "int8", "--batch_size", "4",
+        "--threads", os.environ.get("WHISPER_THREADS") or str(DEFAULT_THREADS),
         "--diarize", "--speaker_embeddings", "--verbose", "False", *VAD_OPTIONS,
         "--output_dir", str(out_dir), "--output_format", "json",
     ]

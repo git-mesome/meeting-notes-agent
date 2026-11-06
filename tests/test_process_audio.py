@@ -111,6 +111,18 @@ def test_transcribe_uses_normalized_audio_and_cleans_up(tmp_path, monkeypatch):
     assert audio.exists()
 
 
+def test_transcribe_thread_count_follows_environment(tmp_path, monkeypatch):
+    fake_whisperx(tmp_path, monkeypatch)
+    audio = tmp_path / "audio.m4a"
+    audio.write_bytes(b"not audio")
+    monkeypatch.delenv("WHISPER_THREADS", raising=False)
+    meeting_notes.transcribe(audio, tmp_path, [])
+    assert "--threads 8" in (tmp_path / "args.txt").read_text(encoding="utf-8")
+    monkeypatch.setenv("WHISPER_THREADS", "16")
+    meeting_notes.transcribe(audio, tmp_path, [])
+    assert "--threads 16" in (tmp_path / "args.txt").read_text(encoding="utf-8")
+
+
 def test_transcribe_falls_back_to_original_when_normalizing_fails(tmp_path, monkeypatch):
     fake_whisperx(tmp_path, monkeypatch)
     audio = tmp_path / "audio.m4a"
