@@ -1505,23 +1505,15 @@ function renderDetail(job, { justConfirmed = false, restore = null, startAt = nu
         api(`/api/jobs/${job.id}`).then((updated) => renderDetail(updated, { restore: currentView() })),
       );
     if (openIssues) openDrafts();
-    section.append(
-      el(
-        "div",
-        { class: "issue-row" },
-        registered.length
-          ? el(
-              "p",
-              { class: "issue-done" },
-              "등록함 ",
-              ...registered.map((item) =>
-                issueKey(item),
-              ),
-            )
-          : null,
-        button(registered.length ? `${status.name}에 더 등록` : `${status.name}에 등록`, { iconName: "issue", onclick: openDrafts }),
-      ),
+    // 등록 버튼은 "액션 아이템" 제목 줄 오른쪽 끝에 둔다.
+    const heading = section.querySelector("h2");
+    const head = el("div", { class: "section-head" });
+    heading.replaceWith(head);
+    head.append(
+      heading,
+      button(registered.length ? `${status.name}에 더 등록` : `${status.name}에 등록`, { iconName: "issue", onclick: openDrafts }),
     );
+    if (registered.length) head.after(el("p", { class: "issue-done" }, "등록함 ", ...registered.map(issueKey)));
   });
 
   const confirmButton = job.confirmed_at
