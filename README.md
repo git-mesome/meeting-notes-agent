@@ -1,117 +1,267 @@
 # meeting-notes-agent
 
-회의 녹음을 올리면 전사문과 회의록 초안을 만드는 도구다. 전사와 화자 구분은 노트북에서 WhisperX로 처리하고, 회의록은 전사문을 Claude API로 보내 작성한다.
+회의 녹음을 올리면 화자별 전사문과 회의록 초안을 만드는 셀프 호스팅 웹 앱이다. 전사와 화자 구분은 로컬 CPU에서 WhisperX로 처리하고, 회의록 작성과 질문 답변, 이슈 초안은 Claude API로 만든다.
 
-## 준비
+- 화자 구분 전사. 멀리 앉은 사람의 작은 목소리도 음량을 보정해 받아 적는다.
+- 회의 유형별 양식(일반, 주간, 고객 미팅, 기술 검토)에 맞춘 개조식 회의록. 사내 배경 지식과 용어 사전으로 표기를 바로잡는다.
+- 회의 내용 질문, 지난 회의 검색, 처리 완료 웹 푸시
+- 화자 이름 지정과 목소리 자동 인식(본인이 동의한 사람만)
+- 액션 아이템을 이슈 트래커에 등록. 트래커는 어댑터로 붙인다.
+- 회사마다 다른 설정은 `company/` 폴더 하나에 둔다.
 
-- [uv](https://docs.astral.sh/uv/)와 `ffmpeg`가 필요하다.
-- Hugging Face에서 [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1) 약관에 동의하고 Read 토큰을 만든다.
-- 프로젝트 폴더의 `.env`에 아래 값을 넣는다. 이 파일은 커밋되지 않는다.
+## 동작 방식
 
+```mermaid
+flowchart LR
+    A[녹음 업로드] --> B[ffmpeg 음량 보정]
+    B --> C[WhisperX<br>전사 · 정렬 · 화자 구분]
+    C --> D[발언 정리<br>단어 단위 화자 분리]
+    D --> E[Claude<br>회의록 작성]
+    E --> F[검토 · 수정 · 확정]
+    F --> G[이슈 초안<br>트래커 등록]
 ```
-HF_TOKEN=Hugging Face 토큰
-ANTHROPIC_API_KEY=Claude API 키
-```
 
-- 회사 폴더를 만든다(아래 "회사 설정"). 없어도 동작하지만, 배경 지식과 이슈 등록은 쓰지 않는다.
+| 단계 | 구현 |
+|---|---|
+| 전처리 | `highpass` + `dynaudnorm`으로 음량을 고른다. 실패하면 원본을 쓴다. |
+| 전사 | faster-whisper `large-v3`(int8, CPU 8스레드), 한국어 정렬 모델 `kresnik/wav2vec2-large-xlsr-korean` |
+| 화자 구분 | `pyannote/speaker-diarization-community-1`. 화자별 목소리 특징도 함께 뽑는다. |
+| 발언 정리 | 단어별 화자가 바뀌는 지점에서 발언을 나눈다. 화자가 잡히지 않은 "감사합니다" 같은 무음 구간 환각 문구는 버린다. |
+| 회의록 | 배경 지식, 용어집, 전사문을 `claude-opus-5-5`에 보내 양식에 맞춘 회의록을 받는다. 길이는 전사문의 20% 이내로 제한한다. |
+| 표기 규칙 | 전사문과 모든 모델 출력에 회사 설정의 표기 규칙을 코드로 적용한다. |
+
+작업은 큐에 쌓아 한 번에 한 건씩 처리한다. 처리 중에 서버가 꺼지면 다시 켤 때 그 작업을 큐에 다시 넣고, 전사 결과가 남아 있으면 전사는 건너뛴다.
+
+## 요구 사항
+
+- [uv](https://docs.astral.sh/uv/)(Python 3.12를 설치한다)와 `ffmpeg`
+- Hugging Face Read 토큰. [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1) 약관에 동의해야 받을 수 있다.
+- Anthropic API 키
+- GPU는 필요 없다. i7-1360P 노트북에서 처리 중 메모리를 최대 약 9GB 썼다.
+
+## 빠른 시작
 
 ```bash
+git clone https://github.com/git-mesome/meeting-notes-agent.git
+cd meeting-notes-agent
+uv sync
 cp -r company.example company
-```
 
-## 회사 설정
+cat > .env <<'EOF'
+HF_TOKEN=hf_...
+ANTHROPIC_API_KEY=sk-ant-...
+EOF
 
-회사마다 다른 것은 `company/` 폴더 하나에 모은다. 사내 정보가 들어가므로 커밋하지 않는다. 다른 회사에서 쓸 때는 이 폴더만 새로 만든다. 위치를 바꾸려면 환경 변수 `COMPANY_DIR`에 경로를 적는다.
-
-```
-company/
-  company.toml          접속 허용 주소, 표기 규칙, 이슈 트래커 설정
-  knowledge/
-    meeting_context.md  팀, 제품, 고객사 같은 배경 지식
-    terms.json          표준 용어 사전
-  glossary.txt          전사할 때 알려 줄 기술 용어
-  <어댑터>.py           이슈 트래커 어댑터
-```
-
-- `glossary.txt`에는 기술 용어를 한 줄에 하나씩 적는다. 사람 이름이나 회사명은 적지 않는다. 전사 모델이 비슷한 소리를 그 이름으로 바꿔 써서, 실제 발언이 다른 이름으로 기록되거나 사라진다. 고유명사는 `knowledge/`에 두면 회의록을 쓸 때 바로잡는다.
-- `knowledge/`의 배경 지식과 용어는 회의록과 질문 답변에 쓴다. 용어 정의는 그 회의에 나온 용어만 보낸다.
-- `company.toml`의 `[spelling]`에 적은 표기는 전사문, 회의록, 질문 답변, 이슈 초안, 직접 고친 회의록에 모두 적용한다. "에이아이"를 "AI"로 바꾸는 규칙은 기본으로 들어 있다.
-- 항목 설명은 `company.example/company.toml`에 있다.
-
-## 웹 화면
-
-```bash
 uv run --env-file .env uvicorn app:create_app --factory
 ```
 
-http://127.0.0.1:8000 에 접속한다. 녹음을 올리면 한 번에 한 건씩 처리하며, 결과는 `jobs/`에 저장한다. 회의록은 사람이 내용을 확인하고 수정한 뒤 확정한다. 화자는 말한 부분을 들어 보고 이름을 정할 수 있고, 이름은 내려받은 파일에도 적용된다. 처리 중인 항목은 중지할 수 있고, 항목을 삭제하면 녹음과 전사문, 회의록이 함께 지워진다.
+http://127.0.0.1:8000 을 연다. 첫 녹음을 처리할 때 전사와 화자 구분 모델을 내려받는다.
+
+## 설정
+
+### 환경 변수
+
+`.env`에 둔다. 이 파일은 커밋하지 않는다.
+
+| 이름 | 필수 | 설명 |
+|---|---|---|
+| `HF_TOKEN` | 예 | pyannote 화자 구분 모델 다운로드 |
+| `ANTHROPIC_API_KEY` | 예 | 회의록, 질문 답변, 이슈 초안 |
+| `COMPANY_DIR` | 아니오 | 회사 폴더 위치. 기본값은 프로젝트의 `company/` |
+| 트래커 토큰 | 어댑터에 따라 | `company.toml`의 `[tracker]`에서 어댑터가 읽을 변수 이름을 정한다. 예: `JIRA_TOKEN` |
+
+### 회사 폴더
+
+회사마다 다른 것은 `company/`에 모은다. 사내 정보가 들어가므로 git에서 제외한다. 다른 회사에서 쓸 때는 이 폴더만 새로 만든다. 없어도 동작하지만 배경 지식과 이슈 등록은 쓰지 않는다.
+
+```
+company/
+├── company.toml          서버, 표기 규칙, 이슈 트래커 설정
+├── knowledge/
+│   ├── meeting_context.md  팀, 제품, 고객사 같은 배경 지식
+│   └── terms.json          표준 용어 사전
+├── glossary.txt          전사할 때 알려 줄 기술 용어
+└── <어댑터>.py           이슈 트래커 어댑터
+```
+
+`company.toml`:
+
+| 키 | 기본값 | 설명 |
+|---|---|---|
+| `server.allowed_hosts` | `["127.0.0.1", "localhost", "*.ts.net"]` | 허용할 Host 헤더 |
+| `spelling` | `"에이아이" = "AI"` | 항상 바꿀 표기. 적은 규칙이 기본값에 더해진다. |
+| `tracker.module` | 없음 | 어댑터 파일 이름(`.py` 제외). `[tracker]`가 없으면 이슈 등록을 끈다. |
+| `tracker.*` | | 나머지 값은 어댑터의 `create(settings)`에 그대로 넘어간다. |
+
+- `glossary.txt`에는 기술 용어만 한 줄에 하나씩 적는다. 사람 이름이나 회사명을 넣으면 전사 모델이 비슷한 소리를 그 이름으로 바꿔 써서, 실제 발언이 다른 이름으로 기록되거나 사라진다. 고유명사는 `knowledge/`에 둔다.
+- `knowledge/`는 회의록과 질문 답변에 쓴다. 전사문의 표기를 바로잡는 데만 쓰고, 회의에 없는 사실을 회의록에 넣지 않는다. 용어 정의는 그 회의에 나온 용어만 보낸다.
+
+## 사용
+
+### 웹 화면
+
+- 녹음을 올릴 때 회의 양식을 고른다. 완성한 뒤에도 다른 양식으로 다시 쓸 수 있다.
+- 회의록은 사람이 확인하고 수정한 뒤 확정한다. 시각 표시를 누르면 그 부분부터 들을 수 있다.
+- 화자는 말한 부분을 들어 보고 이름을 정한다. 이름은 회의록, 전사문, 내려받은 파일에 함께 적용된다.
+- "다음 회의에서도 이 목소리 알아보기"를 켜면 다음 회의부터 같은 사람에게 이름이 자동으로 붙는다.
+- 회의 내용을 질문하면 근거 시각과 함께 답한다. 첫 화면에서 지난 회의의 회의록과 전사문을 검색한다.
+- 처리 중인 작업은 중지할 수 있고, 삭제하면 녹음과 결과가 함께 지워진다.
 
 ### 핸드폰에서 접속
 
-서버는 `127.0.0.1`에 그대로 두고 Tailscale이 같은 네트워크의 기기에만 중계하게 한다. 노트북과 핸드폰에 Tailscale을 설치해 같은 계정으로 로그인한 뒤, 노트북(Windows)에서 아래 명령을 한 번 실행한다.
+서버는 `127.0.0.1`에 두고 [Tailscale](https://tailscale.com/)이 같은 tailnet의 기기에만 중계하게 한다.
 
 ```bash
-tailscale serve --bg --http=80 http://127.0.0.1:8000
+tailscale serve --bg --http=80 http://127.0.0.1:8000     # 접속
+tailscale serve --bg --https=443 http://127.0.0.1:8000   # 웹 푸시용 HTTPS
 ```
 
-명령이 출력한 `http://<기기 이름>.<tailnet>.ts.net/` 주소를 핸드폰 브라우저로 연다. IP 주소로 접속하면 404가 난다. 중계를 끄려면 `tailscale serve --http=80 off`를 실행한다. 노트북이 꺼지거나 절전 상태이면 접속되지 않는다.
-
-웹 화면에는 아직 로그인이 없다. 서버를 `0.0.0.0`으로 열거나 Tailscale Funnel로 공개하면 누구나 회의록을 보고 API 비용을 쓸 수 있으므로 그렇게 실행하지 않는다.
-
-### 회의 양식과 질문
-
-올릴 때 일반 회의, 주간 회의, 고객 미팅, 기술 검토 중에서 양식을 고른다. 완성한 뒤에도 더보기에서 다른 양식으로 다시 쓸 수 있다. 회의록 화면에서 회의 내용을 질문하면 근거 시각과 함께 답한다. 첫 화면에서 지난 회의의 회의록과 전사문을 검색한다.
-
-### 완료 알림
-
-처리가 끝나면 웹 푸시로 알린다. 브라우저 정책상 HTTPS가 필요하므로 Tailscale HTTPS를 켜고 아래 명령을 실행한다. 아이폰은 Safari에서 HTTPS 주소를 열고 홈 화면에 추가한 뒤, 추가한 앱에서 알림을 켠다. HTTPS 인증서를 발급하면 기기 이름이 공개 인증서 기록에 남는다.
-
-```bash
-tailscale serve --bg --https=443 http://127.0.0.1:8000
-```
-
-### 화자 자동 인식
-
-화자 이름을 정할 때 "다음 회의에서도 이 목소리 알아보기"를 켜면, 다음 회의부터 같은 사람에게 이름이 자동으로 붙는다. 목소리 특징은 생체 정보이므로 본인 동의를 받은 사람만 등록한다. `jobs/voices.json`에만 저장하고 외부로 보내지 않으며, "등록한 목소리 관리"에서 지운다. 기준값은 회의 하나로 정했으므로 다른 회의에서는 알아보지 못하거나 틀릴 수 있다.
+출력된 `http(s)://<기기 이름>.<tailnet>.ts.net/`을 연다. IP 주소로 접속하면 404가 난다. 아이폰에서 완료 알림을 받으려면 Safari에서 HTTPS 주소를 홈 화면에 추가하고, 추가한 앱에서 알림을 켠다. 음성 메모는 공유 메뉴의 단축어로 올린다(화면 안내 참고). 노트북이 꺼지거나 절전 상태이면 접속되지 않는다.
 
 ### 이슈 등록
 
-회의록의 액션 아이템을 이슈 트래커에 올린다. `company.toml`에 `[tracker]`가 있으면 회의록 화면의 액션 아이템 아래에 "<트래커 이름>에 등록" 버튼이 생긴다.
+`[tracker]`를 설정하면 회의록 화면의 액션 아이템 아래에 "<트래커 이름>에 등록" 버튼이 생긴다.
 
-버튼을 누르면 트래커의 팀원, 태그, 열린 이슈를 읽고 Claude API로 이슈 초안을 만든다. 열린 이슈가 같은 일을 이미 다루면 새 이슈 대신 그 이슈에 댓글을 다는 초안을 만든다. 초안마다 새 이슈, 기존 이슈에 댓글, 빼기 중에서 고르고 제목, 담당, 태그, 상위 이슈, 설명을 고친다. "등록하기"를 누르고 확인 창에서 한 번 더 승인해야 트래커에 올라간다. 등록한 이슈 키는 회의록에 남고, 다시 열면 이미 등록한 할 일은 빼기로 표시한다.
+1. 트래커의 팀원, 태그, 열린 이슈와 그 설명 앞부분을 읽고 Claude로 초안을 만든다. 같은 일을 다루는 열린 이슈가 있으면 댓글 초안을 만든다.
+2. 초안마다 새 이슈, 기존 이슈에 댓글, 빼기 중에서 고르고 제목, 담당, 태그, 상위 이슈, 설명을 고친다.
+3. "등록하기"를 누르고 확인 창에서 한 번 더 승인해야 트래커에 올라간다.
 
-초안은 회의마다 `jobs/<id>/issue_drafts.json`에 저장하고, 회의록이나 화자 이름이 바뀌었을 때만 새로 만든다. 만드는 중에 창을 닫아도 초안 생성은 계속되고, 다 되면 화면 아래 알림의 "보기"로 다시 연다. 다른 탭을 보고 있고 알림을 켜 두었으면 기기 알림으로도 알린다. 트래커의 이슈가 바뀌어 초안을 새로 만들려면 창의 "다시 만들기"를 누른다.
+초안은 회의마다 저장하고, 회의록이나 화자 이름이 바뀌었을 때만 새로 만든다. 만드는 중에 창을 닫아도 계속 만들고, 다 되면 알린다. 같은 회의의 초안을 동시에 요청하면 한 번만 만든다. 담당은 회의록의 담당 이름이 팀원 이름과 같을 때만 채운다.
 
-#### 트래커 어댑터
+### 명령줄
 
-트래커마다 회사 폴더에 어댑터 파일 하나를 두고 `company.toml`에서 고른다. 예시 폴더의 `example_tracker.py`는 이슈를 `issues.json`에 저장하는 연습용 트래커다. Jira나 사내 도구를 붙일 때는 이 파일을 복사해 메서드 안을 그 트래커의 API 호출로 바꾼다. 규격은 `trackers.py`에 있다.
+웹 서버 없이 녹음 하나를 처리한다. 결과는 `outputs/<파일 이름>/`에 저장한다.
+
+```bash
+uv run --env-file .env python meeting_notes.py recordings/회의.m4a --template weekly
+```
+
+## 이슈 트래커 어댑터
+
+회사 폴더에 `trackers.Tracker`를 상속한 클래스와, 설정을 받아 그 객체를 돌려주는 `create(settings)` 함수를 둔 파일을 만든다. `create`가 `None`을 돌려주면(토큰이 없을 때 등) 연동하지 않는다. 예시 폴더의 `example_tracker.py`는 이슈를 `issues.json`에 저장하는 연습용 트래커로, 새 어댑터를 만들 때 복사해서 쓴다.
 
 ```toml
 [tracker]
-module = "jira"      # company/jira.py
+module = "jira"            # company/jira.py
 url = "https://example.atlassian.net"
 project = "WEB"
-token_env = "JIRA_TOKEN"
+token_env = "JIRA_TOKEN"   # 토큰은 .env에 둔다
 ```
 
-`module` 외의 값은 어댑터의 `create(settings)`에 그대로 넘어간다. 토큰은 `company.toml`이 아니라 `.env`에 두고, 어댑터가 환경 변수에서 읽는다. 어댑터는 트래커 이름, 분류와 우선순위 목록, 이슈 설명 양식 같은 규칙도 정한다. 초안은 이 목록 안에서만 값을 고른다.
+| 속성 · 메서드 | 설명 |
+|---|---|
+| `name` | 화면에 쓰는 이름. 예: "Jira에 등록" |
+| `destination` | 이슈가 올라가는 곳. 예: "WEB 프로젝트" |
+| `categories`, `priorities` | 고를 수 있는 분류와 우선순위. 비우면 그 항목을 쓰지 않는다. 초안은 이 목록 안에서만 고른다. |
+| `guide` | 이슈 설명 양식처럼 초안을 쓸 때 더할 규칙 |
+| `after_register` | 등록한 뒤 화면에 보여 줄 안내 |
+| `issue_url(key)` | 이슈를 열 주소 |
+| `people()`, `tags()` | 담당자와 태그 이름 목록 |
+| `open_issues()` | 열린 이슈 목록(`key`, `title`, `type`, `status`, `tags`, `assignees`). `type`이 `"epic"`이면 상위 이슈로 고를 수 있다. |
+| `issue(key)` | 이슈 하나. `description`으로 같은 일을 다루는지 판단한다. |
+| `create(issues)` | 이슈를 만들고 새 키를 같은 순서로 돌려준다. |
+| `comment(key, text)` | 댓글을 단다. |
 
-초안을 만들 때 회의록 전체와 열린 이슈의 설명 앞부분이 Claude API로 전송된다. 담당은 회의록의 담당 이름이 팀원 이름과 같을 때만 채우므로, 화자 이름을 먼저 정해 두면 담당이 채워진다.
+실패는 `trackers.TrackerError`로 알린다. 메시지는 화면에 그대로 보인다.
 
-## 명령줄
+## 프로젝트 구조
 
-```bash
-uv run --env-file .env python meeting_notes.py recordings/회의.m4a
+```
+app.py              FastAPI 서버, 작업 큐, HTTP API
+meeting_notes.py    전사 파이프라인, Claude 호출, 명령줄 도구
+note_templates.py   회의 유형별 회의록 양식과 공통 문체 규칙
+company.py          회사 폴더 설정 읽기
+trackers.py         이슈 트래커 어댑터 규격
+voices.py           목소리 등록과 대조
+push.py             웹 푸시(VAPID)
+static/             화면(바닐라 JS SPA, 서비스 워커, PWA 매니페스트)
+company.example/    회사 폴더 예시와 연습용 트래커
+tests/              pytest, 화면 개발용 가짜 서버
 ```
 
-결과는 `outputs/<파일 이름>/`에 저장한다.
+### 데이터
 
-## 처리 시간
+결과는 `jobs/`에 저장하며 git에서 제외한다.
 
-CPU(i7-1360P)에서 `large-v3`를 8스레드로 돌리면 음성 길이의 2.2~2.7배가 걸린다. 36분 녹음은 79~97분 걸렸다. 처리하는 동안 노트북이 켜져 있어야 한다.
+| 경로 | 내용 |
+|---|---|
+| `jobs/<id>/meta.json` | 상태, 제목, 양식, 화자 이름, 등록한 이슈 |
+| `jobs/<id>/audio.*` | 올린 녹음 |
+| `jobs/<id>/audio.json` | WhisperX 결과 |
+| `jobs/<id>/turns.json`, `transcript.txt` | 화자별 발언 |
+| `jobs/<id>/notes.md` | 회의록. 직접 고치면 처음 생성본을 `notes.draft.md`에, 다른 양식으로 다시 쓰면 이전 본을 `notes.previous.md`에 남긴다. |
+| `jobs/<id>/questions.json` | 질문과 답변 |
+| `jobs/<id>/speaker_embeddings.json` | 화자별 목소리 특징(권한 600) |
+| `jobs/<id>/issue_drafts.json` | 이슈 초안 |
+| `jobs/voices.json` | 등록한 목소리(권한 600) |
+| `jobs/push-key.pem`, `jobs/push-subscriptions.json` | 웹 푸시 키와 구독 정보 |
 
-## 테스트
+## HTTP API
+
+화면이 쓰는 API다. 인증은 없고, 쓰기 요청은 같은 사이트에서 보낸 것만 받는다.
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `POST` | `/api/jobs?template=` | 녹음 업로드. multipart 파일이나 요청 본문 그대로(단축어용). 최대 1GB |
+| `GET` | `/api/jobs` | 작업 목록과 대기 순서, 예상 시간 |
+| `GET` | `/api/jobs/{id}` | 작업 상세. 완료되면 회의록, 발언, 화자, 질문, 등록한 이슈를 함께 준다. |
+| `DELETE` | `/api/jobs/{id}` | 삭제 |
+| `POST` | `/api/jobs/{id}/cancel`, `/retry` | 중지, 다시 시작 |
+| `PUT` | `/api/jobs/{id}/notes` | 회의록 수정 |
+| `POST` | `/api/jobs/{id}/confirm` | 확정 |
+| `POST` | `/api/jobs/{id}/regenerate` | 다른 양식으로 다시 쓰기 |
+| `PUT` | `/api/jobs/{id}/speakers/{label}` | 화자 이름 지정, 목소리 등록 |
+| `POST` | `/api/jobs/{id}/ask` | 질문 |
+| `GET` | `/api/jobs/{id}/audio`, `/download` | 녹음 재생, 회의록 내려받기(`.md`) |
+| `POST` | `/api/jobs/{id}/issues/drafts?refresh=` | 이슈 초안 |
+| `POST` | `/api/jobs/{id}/issues` | 이슈 등록 |
+| `GET` | `/api/search?q=` | 회의록, 전사문 검색 |
+| `GET` | `/api/templates`, `/api/tracker` | 양식 목록, 트래커 연동 상태 |
+| `GET`, `DELETE` | `/api/voices`, `/api/voices/{id}` | 등록한 목소리 목록, 삭제 |
+| `GET`, `POST` | `/api/push/key`, `/subscribe`, `/unsubscribe` | 웹 푸시 |
+
+## 보안과 개인정보
+
+- 로그인이 없다. 서버는 `127.0.0.1`에만 열고 Tailscale로 중계한다. `0.0.0.0`으로 열거나 Tailscale Funnel로 공개하면 누구나 회의록을 보고 API 비용을 쓸 수 있다.
+- 허용한 Host만 받고, 다른 사이트에서 보낸 쓰기 요청은 본문을 읽기 전에 막는다. CSP와 보안 헤더를 붙인다.
+- 녹음과 목소리 특징은 노트북 밖으로 보내지 않는다. 전사문, 회의록, 배경 지식, 열린 이슈의 설명 앞부분은 Claude API로 전송된다.
+- 목소리 특징은 생체 정보다. 본인이 동의한 사람만 등록하고, "등록한 목소리 관리"에서 지운다.
+- Tailscale HTTPS 인증서를 발급하면 기기 이름이 공개 인증서 기록(Certificate Transparency)에 남는다.
+
+## 개발
 
 ```bash
 uv run pytest
 ```
+
+테스트는 빈 회사 폴더로 돌아서, 이 컴퓨터의 `company/` 설정에 영향을 받지 않는다. 회사 폴더의 어댑터 테스트는 따로 돌린다(예: `uv run pytest company/`).
+
+화면만 고칠 때는 전사와 API 호출 없이 예시 회의록을 돌려주는 가짜 서버를 쓴다.
+
+```bash
+uv run uvicorn tests.fake_server:create --factory --port 8010
+```
+
+| 환경 변수 | 기본값 | 설명 |
+|---|---|---|
+| `FAKE_DATA_DIR` | `jobs-fake` | 가짜 서버의 저장 위치 |
+| `FAKE_STAGE_SECONDS` | `15` | 전사 단계에 걸리는 시간(초) |
+
+## 성능
+
+i7-1360P, `large-v3` int8, 8스레드 기준으로 음성 길이의 2.2~2.7배가 걸린다. 36분 녹음은 79~97분 걸렸다. 2분 구간을 잰 결과 화자 구분이 42%, 전사가 35%, 정렬이 16%, 모델 로딩이 7%를 차지했다. 회의록 작성 API 비용은 36분 회의 한 건에 약 0.3달러였다.
+
+## 모델 라이선스
+
+| 모델 | 라이선스 |
+|---|---|
+| [`Systran/faster-whisper-large-v3`](https://huggingface.co/Systran/faster-whisper-large-v3) | MIT |
+| [`pyannote/speaker-diarization-community-1`](https://huggingface.co/pyannote/speaker-diarization-community-1) | CC-BY-4.0(약관 동의 필요) |
+| [`kresnik/wav2vec2-large-xlsr-korean`](https://huggingface.co/kresnik/wav2vec2-large-xlsr-korean) | Apache-2.0 |
+
+## 한계
+
+- 로그인이 없어 한 사람이 쓰는 용도다. 여러 사람이 쓰려면 계정 로그인이 필요하다.
+- CPU로 처리해 녹음 길이보다 두 배 이상 오래 걸리고, 그동안 노트북이 켜져 있어야 한다.
+- 마이크 하나로 녹음하므로 짧게 끼어든 말은 다른 화자의 발언에 섞일 수 있다.
+- 목소리 자동 인식 기준값(코사인 유사도 0.75)은 회의 하나로 정한 잠정값이다. 다른 장소와 날짜의 회의에서는 알아보지 못하거나 틀릴 수 있다.
