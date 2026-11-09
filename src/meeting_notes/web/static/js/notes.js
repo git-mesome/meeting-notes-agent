@@ -61,14 +61,41 @@ export function renderTable(lines, onTime) {
   );
 }
 
-export function renderNotes(markdown, onTime) {
+// "확인 필요" 항목. 오른쪽 체크 상자로 직접 확인했는지 표시한다.
+function checkItem(text, done, index, onTime, onCheck) {
+  const box = el("input", { type: "checkbox", class: "check-box", "aria-label": "확인함" });
+  box.checked = done;
+  const item = el(
+    "li",
+    { class: `check-item${done ? " done" : ""}` },
+    el("span", { class: "check-text" }, ...inline(text, onTime)),
+    el("label", { class: "check-hit", "data-ui": "" }, box),
+  );
+  box.addEventListener("change", async () => {
+    item.classList.toggle("done", box.checked);
+    if (!onCheck) return;
+    try {
+      await onCheck(index, box.checked);
+    } catch (error) {
+      box.checked = !box.checked;
+      item.classList.toggle("done", box.checked);
+      toast(error.message, true);
+    }
+  });
+  return item;
+}
+
+export function renderNotes(markdown, onTime, { onCheck } = {}) {
   const container = el("article", { class: "notes" });
   const lines = markdown.split("\n");
   let parent = null;
   let list = null;
   let ordered = null;
-  const section = (extra = "") => {
+  let sectionIndex = -1;
+  let checkIndex = -1;
+  const section = (extra = "", index = null) => {
     parent = el("section", { class: `card ${extra}` });
+    if (index !== null) parent.dataset.index = String(index);
     container.append(parent);
     return parent;
   };
@@ -79,7 +106,11 @@ export function renderNotes(markdown, onTime) {
     if (!trimmed || trimmed.startsWith("# ")) continue;
     if (trimmed.startsWith("## ")) {
       const heading = trimmed.slice(3);
-      section(heading.startsWith("확인 필요") ? "check" : "").append(el("h2", { text: heading }));
+      sectionIndex += 1;
+      // 제목 줄 오른쪽(.section-actions)에 수정, 이슈 등록 같은 버튼이 붙는다.
+      section(heading.startsWith("확인 필요") ? "check" : "", sectionIndex).append(
+        el("div", { class: "section-head", "data-ui": "" }, el("h2", { text: heading }), el("div", { class: "section-actions" })),
+      );
       continue;
     }
     const target = parent || section();
@@ -96,7 +127,14 @@ export function renderNotes(markdown, onTime) {
         list = el("ul");
         target.append(list);
       }
-      list.append(el("li", {}, ...inline(trimmed.slice(2), onTime)));
+      if (target.classList.contains("check")) {
+        checkIndex += 1;
+        const marker = trimmed.slice(2).match(/^\[([ xX])\]\s*/);
+        const text = marker ? trimmed.slice(2 + marker[0].length) : trimmed.slice(2);
+        list.append(checkItem(text, Boolean(marker) && marker[1] !== " ", checkIndex, onTime, onCheck));
+      } else {
+        list.append(el("li", {}, ...inline(trimmed.slice(2), onTime)));
+      }
     } else if (trimmed.startsWith("|")) {
       const tableLines = [];
       while (index < lines.length && lines[index].trim().startsWith("|")) {
@@ -110,6 +148,15 @@ export function renderNotes(markdown, onTime) {
     }
   }
   return container;
+}
+
+// 화면에는 화자 라벨 대신 이름을 보여 준다. 저장할 때는 아직 정하지 않은 "화자 N"만 원래 라벨로 되돌려,
+// 나중에 이름을 정해도 본문에 반영되게 한다.
+export function storedText(job) {
+  const defaults = job.speakers
+    .filter((item) => item.known && !item.custom)
+    .sort((a, b) => b.default_name.length - a.default_name.length);
+  return (text) => defaults.reduce((result, item) => result.replaceAll(item.default_name, item.label), text);
 }
 
 export function renderEditor(job) {
@@ -132,15 +179,9 @@ export function renderEditor(job) {
       },
     }),
   });
-  // 화면과 같은 이름으로 보여 주고, 아직 정하지 않은 "화자 N"은 저장할 때 원래 라벨로 되돌린다.
-  // 그래야 나중에 이름을 정해도 본문에 반영된다.
   const names = new Map(job.speakers.map((item) => [item.label, item.name]));
   const shown = job.notes.replace(/SPEAKER_\d+/g, (label) => names.get(label) || label);
-  const defaults = job.speakers
-    .filter((item) => item.known && !item.custom)
-    .sort((a, b) => b.default_name.length - a.default_name.length);
-  const toStored = (text) =>
-    defaults.reduce((result, item) => result.replaceAll(item.default_name, item.label), text);
+  const toStored = storedText(job);
 
   const area = el("textarea", { "aria-label": "회의록 내용" });
   area.value = shown;

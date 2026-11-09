@@ -84,7 +84,7 @@ export function openMoreMenu(job) {
           },
         },
         icon("pencil"),
-        "수정하기",
+        "마크다운으로 전체 수정",
       ),
       el(
         "a",

@@ -7,6 +7,10 @@ class NotesUpdate(BaseModel):
     notes: str = Field(min_length=1, max_length=1_000_000)
 
 
+class CheckUpdate(BaseModel):
+    done: bool
+
+
 class SpeakerName(BaseModel):
     name: str = Field(max_length=20)
     remember: bool = False

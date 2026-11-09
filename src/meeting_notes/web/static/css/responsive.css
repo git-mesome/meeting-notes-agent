@@ -1,6 +1,15 @@
 /* 화면 너비별 배치와 움직임 줄이기. 다른 파일보다 나중에 읽어야 한다. */
 
 @media (max-width: 859px) {
+  .section-head .edit-button {
+    min-width: 2.25rem;
+    padding: 0.3rem 0.5rem;
+  }
+
+  .section-head .edit-label {
+    display: none;
+  }
+
   .tabs {
     display: flex;
   }

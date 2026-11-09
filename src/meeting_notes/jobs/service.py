@@ -23,6 +23,8 @@ from meeting_notes.speakers.names import FORBIDDEN_NAME_CHARS, SPEAKER_LABEL, ap
 logger = logging.getLogger(__name__)
 
 STILL_STOPPING_MESSAGE = "아직 멈추는 중이에요. 잠시 후 다시 시도해 주세요."
+# "확인 필요" 항목의 확인 표시. 확인한 항목은 "- [x] 내용"으로 적는다.
+CHECK_ITEM = re.compile(r"^\s*[-*]\s+(?:\[[ xX]\]\s+)?")
 
 
 def require_template(template):
@@ -189,18 +191,42 @@ class JobService:
 
     # 고치기
 
+    def write_notes(self, job_id, notes):
+        notes_path = self.store.path(job_id) / "notes.md"
+        temp = notes_path.with_suffix(".tmp")
+        temp.write_text(notes, encoding="utf-8")
+        os.replace(temp, notes_path)
+
     def edit_notes(self, job_id, notes):
         job = self.get(job_id)
         self.require_done(job)
         notes = fix_spelling(notes)
-        notes_path = self.store.path(job_id) / "notes.md"
         draft_path = self.store.path(job_id) / "notes.draft.md"
         if not draft_path.exists():
-            shutil.copyfile(notes_path, draft_path)
-        temp = notes_path.with_suffix(".tmp")
-        temp.write_text(notes, encoding="utf-8")
-        os.replace(temp, notes_path)
+            shutil.copyfile(self.store.path(job_id) / "notes.md", draft_path)
+        self.write_notes(job_id, notes)
         self.store.update(job_id, title=notes_title(notes, job["name"]), confirmed_at=None)
+        return self.detail(job_id)
+
+    def set_check(self, job_id, index, done):
+        """확인 필요 절의 index번째 항목에 확인 표시를 하거나 지운다. 내용은 그대로라 확정은 풀지 않는다."""
+        job = self.get(job_id)
+        self.require_done(job)
+        lines = self.notes(job_id).split("\n")
+        in_checks, count = False, -1
+        for number, line in enumerate(lines):
+            if line.startswith("## "):
+                in_checks = line[3:].strip().startswith("확인 필요")
+                continue
+            if in_checks and CHECK_ITEM.match(line):
+                count += 1
+                if count == index:
+                    body = CHECK_ITEM.sub("", line, count=1)
+                    lines[number] = f"- [x] {body}" if done else f"- {body}"
+                    break
+        else:
+            raise NotFound("확인할 항목을 찾을 수 없어요.")
+        self.write_notes(job_id, "\n".join(lines))
         return self.detail(job_id)
 
     def rename_speaker(self, job_id, label, name, remember):

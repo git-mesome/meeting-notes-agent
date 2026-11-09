@@ -675,3 +675,115 @@
   background: var(--surface);
   font-size: 0.9375rem;
 }
+
+/* 카드 제목 줄: 오른쪽에 수정, 이슈 등록 버튼 */
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+/* 버튼이 많아도 제목은 줄을 바꾸지 않고, 버튼이 다음 줄 오른쪽으로 내려간다. */
+.notes .section-head h2 {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.section-head .button {
+  flex: none;
+  min-height: 2.25rem;
+  padding: 0.3rem 0.85rem;
+  border-radius: 10px;
+  font-size: 0.875rem;
+}
+
+.section-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.section-head .edit-button {
+  padding: 0.3rem 0.7rem;
+  background: transparent;
+  color: var(--sub);
+}
+
+/* 카드를 그 자리에서 고칠 때 */
+.notes section.editing {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.notes .editable {
+  border-radius: 8px;
+  outline: none;
+  background: var(--soft);
+  cursor: text;
+}
+
+.notes .editable:focus {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+
+/* 고치는 칸의 배경이 글자에 붙지 않게 양옆을 띄우고, 그만큼 바깥으로 넓혀 글자 위치는 그대로 둔다. */
+.notes h3.editable,
+.notes p.editable,
+.notes .check-text.editable,
+.notes td > div.editable {
+  margin-right: -0.35rem;
+  margin-left: -0.35rem;
+  padding-right: 0.35rem;
+  padding-left: 0.35rem;
+}
+
+.notes ul.editable,
+.notes ol.editable {
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+
+.notes .add-row {
+  margin-top: 0.5rem;
+}
+
+/* 확인 필요: 항목마다 오른쪽에 확인 표시 */
+.notes .check-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.check-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.check-hit {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  margin: -0.45rem -0.5rem -0.45rem 0;
+  cursor: pointer;
+}
+
+.check-box {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.notes .check-item.done .check-text {
+  color: var(--muted);
+  text-decoration: line-through;
+}

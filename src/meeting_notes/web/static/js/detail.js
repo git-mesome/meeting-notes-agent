@@ -5,6 +5,7 @@ import { renderAsk } from "./ask.js";
 import { badge, clock, displayName, metaText } from "./format.js";
 import { issueKey, openIssueSheet, trackerStatus } from "./issues.js";
 import { openMoreMenu } from "./menus.js";
+import { attachSectionEditors } from "./edit.js";
 import { renderNotes } from "./notes.js";
 import { setScreen } from "./screen.js";
 import { reducedMotion, state } from "./state.js";
@@ -283,7 +284,14 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
   });
   state.cleanup = () => audio.pause();
 
-  const notesPane = el("div", {}, renderNotes(friendly(job.notes), seek));
+  // 확인 필요 항목의 체크는 바로 저장한다. 내용은 그대로라 화면을 다시 그리지 않는다.
+  const onCheck = async (index, done) => {
+    const updated = await api(`/api/jobs/${job.id}/checks/${index}`, jsonOptions("PUT", { done }));
+    job.notes = updated.notes;
+  };
+  const article = renderNotes(friendly(job.notes), seek, { onCheck });
+  attachSectionEditors(article, job, (updated) => renderDetail(updated, { restore: currentView() }));
+  const notesPane = el("div", {}, article);
   const transcriptCard = el("div", { class: "card" }, transcript);
   const askCard = renderAsk(job, seek, friendly);
 
@@ -335,15 +343,13 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
         api(`/api/jobs/${job.id}`).then((updated) => renderDetail(updated, { restore: currentView() })),
       );
     if (openIssues) openDrafts();
-    // 등록 버튼은 "액션 아이템" 제목 줄 오른쪽 끝에 둔다.
-    const heading = section.querySelector("h2");
-    const head = el("div", { class: "section-head" });
-    heading.replaceWith(head);
-    head.append(
-      heading,
+    // 등록 버튼은 "액션 아이템" 제목 줄 오른쪽, 수정 버튼 앞에 둔다.
+    section.querySelector(".section-actions").prepend(
       button(registered.length ? `${status.name}에 더 등록` : `${status.name}에 등록`, { iconName: "issue", onclick: openDrafts }),
     );
-    if (registered.length) head.after(el("p", { class: "issue-done" }, "등록함 ", ...registered.map(issueKey)));
+    if (registered.length) {
+      section.querySelector(".section-head").after(el("p", { class: "issue-done", "data-ui": "" }, "등록함 ", ...registered.map(issueKey)));
+    }
   });
 
   const confirmButton = job.confirmed_at

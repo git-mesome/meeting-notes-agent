@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from fastapi.responses import Response
 
 from meeting_notes.web.deps import Jobs
-from meeting_notes.web.schemas import NotesUpdate, Question, Regenerate
+from meeting_notes.web.schemas import CheckUpdate, NotesUpdate, Question, Regenerate
 
 router = APIRouter(prefix="/api")
 
@@ -14,6 +14,12 @@ router = APIRouter(prefix="/api")
 @router.put("/jobs/{job_id}/notes")
 def update_notes(job_id: str, body: NotesUpdate, jobs: Jobs):
     return jobs.edit_notes(job_id, body.notes)
+
+
+@router.put("/jobs/{job_id}/checks/{index}")
+def set_check(job_id: str, index: int, body: CheckUpdate, jobs: Jobs):
+    """확인 필요 항목에 확인 표시를 한다."""
+    return jobs.set_check(job_id, index, body.done)
 
 
 @router.post("/jobs/{job_id}/confirm")
