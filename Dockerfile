@@ -1,4 +1,4 @@
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm AS base
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
@@ -12,9 +12,17 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY . .
 RUN uv sync --frozen --no-dev
+ENV PATH="/app/.venv/bin:$PATH"
+# 배포 스크립트가 지난 이미지를 정리할 때 이 표시로 고른다.
+LABEL app=meeting-notes-agent
 
+# GitLab CI가 docker build --target test로 테스트만 돌린다. 앱 이미지에는 들어가지 않는다.
+FROM base AS test
+RUN uv sync --frozen && pytest -q
+
+FROM base
 # 회사 폴더, 결과, 모델 캐시는 바깥에서 붙인다(compose.yaml).
-ENV PATH="/app/.venv/bin:$PATH" COMPANY_DIR=/company HF_HOME=/models
+ENV COMPANY_DIR=/company HF_HOME=/models
 RUN useradd --uid 10001 --create-home app && mkdir -p jobs && chown app jobs
 USER app
 

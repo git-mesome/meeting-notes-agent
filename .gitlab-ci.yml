@@ -1,0 +1,21 @@
+# GitLab에서만 쓴다. 저장소를 합쳐 올리는 방법과 러너 등록은 README의 "자동 배포".
+# 서버의 shell 러너가 root로 실행한다. 모든 브랜치는 테스트만, main은 테스트를 통과하면 서버에 배포한다.
+stages: [test, deploy]
+
+default:
+  tags: [meeting-notes-deploy]
+
+test:
+  stage: test
+  script:
+    - docker build --progress=plain --target test -t meeting-notes-agent:test .
+
+deploy:
+  stage: deploy
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  # 배포가 겹치지 않게 하나씩 돌린다. 처리 중인 회의를 기다리느라 길어질 수 있다.
+  resource_group: production
+  timeout: 3h
+  script:
+    - bash scripts/deploy.sh

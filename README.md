@@ -181,6 +181,32 @@ docker compose up -d --build
 
 결과와 모델 폴더는 컨테이너 사용자(uid 10001)가 쓸 수 있어야 한다. 첫 녹음을 처리할 때 모델 약 4GB를 내려받는다.
 
+### 자동 배포(GitLab)
+
+코드와 회사 폴더는 각자의 GitHub 저장소(공개, 비공개)에 두고, GitLab에는 둘을 합친 저장소 하나를 둔다. GitLab이 받으면 모든 브랜치에서 테스트하고, `main`이면 서버에 배포한다.
+
+```bash
+git config meeting-notes.gitlab <GitLab 저장소 SSH 주소>   # 처음 한 번
+scripts/push_all.sh                                       # 지금 브랜치를 세 곳에 올린다
+```
+
+`scripts/push_all.sh`는 다음 순서로 올린다.
+
+1. 아직 올리지 않은 커밋을 회사 폴더의 `scan-patterns.txt`(사내 정보 정규식 목록)로 검사하고, 걸리는 줄이 없을 때만 공개 저장소에 올린다.
+2. 회사 폴더 저장소(`.env`의 `COMPANY_DIR`)의 `main`을 올린다.
+3. 코드 트리에 회사 폴더를 `company/`로 얹은 커밋을 만들어 GitLab의 같은 브랜치에 올린다. 합치기는 `.git/gitlab-mirror.git`에서만 하므로 코드 저장소에는 회사 파일이 들어오지 않는다.
+
+GitLab에서 직접 고치거나 머지하지 않는다. 다음에 올릴 때 코드와 회사 폴더 저장소의 내용으로 덮인다.
+
+배포는 서버의 shell 러너가 root로 `scripts/deploy.sh`를 실행한다. 새 이미지를 먼저 만들고, 처리 중인 회의가 끝나기를 기다린 뒤(최대 2시간) 앱과 회사 폴더를 바꿔 끼운다. 새 앱이 1분 안에 응답하지 않으면 앞 버전(`*.prev`)으로 되돌린다. 서버의 `.env`, 결과, 모델 폴더는 건드리지 않는다.
+
+러너는 GitLab 프로젝트의 Settings → CI/CD → Runners에서 태그 `meeting-notes-deploy`로 만든 뒤 서버에 등록한다.
+
+```bash
+gitlab-runner register --non-interactive --url <GitLab 주소> --token <러너 토큰> \
+  --executor shell --name meeting-notes-deploy --env APP_ROOT=/srv/meeting-notes
+```
+
 ## 이슈 트래커 어댑터
 
 회사 폴더에 `meeting_notes.issues.Tracker`를 상속한 클래스와, 설정을 받아 그 객체를 돌려주는 `create(settings)` 함수를 둔 파일을 만든다. `create`가 `None`을 돌려주면(토큰이 없을 때 등) 연동하지 않는다. 예시 폴더의 `example_tracker.py`는 이슈를 `issues.json`에 저장하는 연습용 트래커로, 새 어댑터를 만들 때 복사해서 쓴다.
@@ -236,6 +262,7 @@ src/meeting_notes/
 ├── auth/                oidc(SSO 로그인), session(쿠키 서명)
 └── notifications/       웹 푸시(VAPID)
 company.example/         회사 폴더 예시와 연습용 트래커
+scripts/                 push_all.sh(GitHub·GitLab에 올리기), deploy.sh(GitLab CI의 서버 배포)
 tests/                   pytest, 화면 개발용 가짜 서버
 ```
 
