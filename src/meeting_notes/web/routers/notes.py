@@ -36,6 +36,17 @@ def download(job_id: str, jobs: Jobs):
     )
 
 
+@router.get("/jobs/{job_id}/share")
+def share(job_id: str, jobs: Jobs):
+    """팀원과 나눌 HTML 파일로 내려받는다."""
+    title, page = jobs.share(job_id)
+    return Response(
+        page,
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(f'회의록 {title}.html')}"},
+    )
+
+
 @router.post("/jobs/{job_id}/ask")
 def ask(job_id: str, body: Question, jobs: Jobs):
     return jobs.ask(job_id, body.question)

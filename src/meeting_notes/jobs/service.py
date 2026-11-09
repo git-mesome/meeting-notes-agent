@@ -9,6 +9,7 @@ import uuid
 
 from meeting_notes.errors import AppError, Conflict, NotFound, Upstream
 from meeting_notes.jobs.search import plain_text, search_pattern, snippet
+from meeting_notes.jobs.share import render_share_html
 from meeting_notes.jobs.store import ACTIVE_STATUSES, now
 from meeting_notes.jobs.views import public_jobs
 from meeting_notes.pipeline.audio import find_audio, probe_duration
@@ -100,6 +101,17 @@ class JobService:
         speakers = self.speakers(job)
         title = apply_speaker_names(job["title"] or job["name"], speakers)
         return re.sub(r'[\\/:*?"<>|\r\n]', "_", title)[:80], self.named_notes(job, speakers)
+
+    def share(self, job_id):
+        """팀원과 나눌 HTML. 전사문, 근거 시각, 확인 필요는 빼고 화자 이름을 넣는다."""
+        job = self.get(job_id)
+        self.require_done(job)
+        speakers = self.speakers(job)
+        title = apply_speaker_names(job["title"] or job["name"], speakers)
+        page = render_share_html(
+            title, job["created_at"], job["duration_seconds"], bool(job.get("confirmed_at")), self.named_notes(job, speakers)
+        )
+        return re.sub(r'[\\/:*?"<>|\r\n]', "_", title)[:80], page
 
     def search(self, query):
         pattern = search_pattern(query[:100])

@@ -93,6 +93,12 @@ export function openMoreMenu(job) {
         "내려받기",
       ),
       el(
+        "a",
+        { class: "sheet-item", href: `/api/jobs/${job.id}/share`, onclick: close },
+        icon("download"),
+        "공유용 HTML 내려받기",
+      ),
+      el(
         "button",
         {
           class: "sheet-item danger",

@@ -4,5 +4,6 @@
     worker.py   녹음을 한 건씩 처리하는 큐
     views.py    화면에 보낼 항목과 남은 시간
     search.py   회의록·전사문 검색 도구
+    share.py    팀원과 나눌 HTML
     service.py  조회, 수정, 질문, 다시 쓰기 같은 작업(라우터가 쓰는 서비스)
 """
