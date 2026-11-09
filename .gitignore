@@ -3,16 +3,16 @@ __pycache__/
 .env
 .env.*
 
-# 회의 녹음과 전사 결과, 회사 정보는 커밋하지 않는다
-company/
-recordings/
-outputs/
+# 회의 녹음과 전사 결과, 회사 정보는 커밋하지 않는다. 앞의 /는 프로젝트 최상위 폴더만 뜻한다(코드의 jobs 패키지와 구분).
+/company/
+/recordings/
+/outputs/
 *.wav
 *.m4a
 *.mp3
 *.flac
-jobs/
-jobs-fake/
-.playwright-mcp/
+/jobs/
+/jobs-fake/
+/.playwright-mcp/
 company.example/issues.json
-models/
+/models/
