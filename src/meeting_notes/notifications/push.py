@@ -12,7 +12,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from voices import write_private
+from meeting_notes.files import write_private
 
 logger = logging.getLogger("meeting_notes.push")
 

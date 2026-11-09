@@ -1,14 +1,14 @@
 """연습용 이슈 트래커 어댑터. 이슈를 이 폴더의 issues.json에 저장한다.
 
 실제 트래커(Jira, GitHub Issues, 사내 도구 등)를 붙일 때는 이 파일을 복사해 메서드 안을 그 트래커의 API 호출로
-바꾸고, company.toml의 [tracker] module에 새 파일 이름을 적는다. 규격은 trackers.py에 있다.
+바꾸고, company.toml의 [tracker] module에 새 파일 이름을 적는다. 규격은 src/meeting_notes/issues/trackers.py에 있다.
 """
 
 import json
 import threading
 from pathlib import Path
 
-from trackers import Tracker, TrackerError
+from meeting_notes.issues import Tracker, TrackerError
 
 
 class FileTracker(Tracker):

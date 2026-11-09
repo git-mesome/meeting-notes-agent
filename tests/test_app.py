@@ -8,8 +8,9 @@ from urllib.parse import quote
 import pytest
 from fastapi.testclient import TestClient
 
-import app as app_module
-from app import create_app, notes_title
+from meeting_notes.main import create_app
+from meeting_notes.pipeline.notes import notes_title
+from meeting_notes.web.routers import jobs as jobs_router
 
 NOTES = "# 회의록: 예시 회의\n\n## 요약\n- 내용이다. [00:01]\n"
 TURNS = [{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00", "text": "예시 발언이다."}]
@@ -140,14 +141,14 @@ def test_rejects_raw_body_that_is_not_audio(client, tmp_path, body):
 
 
 def test_rejects_raw_body_over_limit(client, tone, tmp_path, monkeypatch):
-    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 5)
+    monkeypatch.setattr(jobs_router, "MAX_UPLOAD_BYTES", 5)
     response = client.post("/api/jobs", content=tone, headers={"Content-Type": "audio/x-m4a"})
     assert response.status_code == 413
     assert list(tmp_path.iterdir()) == []
 
 
 def test_rejects_form_upload_over_limit(client, tone, tmp_path, monkeypatch):
-    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 5)
+    monkeypatch.setattr(jobs_router, "MAX_UPLOAD_BYTES", 5)
     response = client.post("/api/jobs", files={"file": ("a.m4a", tone, "audio/mp4")})
     assert response.status_code == 413
     assert list(tmp_path.iterdir()) == []
@@ -487,13 +488,14 @@ def test_security_headers_and_no_store(client):
 
 def test_index_points_to_current_app_files(client):
     html = client.get("/").text
-    for name in ("app.js", "style.css"):
+    assert 'type="module"' in html
+    for name in ("js/main.js", "css/base.css", "css/responsive.css"):
         match = re.search(rf'"(/static/{name}\?v=[0-9a-f]{{12}})"', html)
         assert match and client.get(match.group(1)).status_code == 200
 
 
 def test_static_files_are_revalidated(client):
-    assert client.get("/static/app.js").headers["cache-control"] == "no-cache"
+    assert client.get("/static/js/main.js").headers["cache-control"] == "no-cache"
     assert client.get("/sw.js").headers["cache-control"] == "no-cache"
 
 

@@ -1,0 +1,354 @@
+/* 첫 화면: 녹음 올리기, 회의 양식, 알림 켜기, 검색, 회의록 목록 */
+
+/* 첫 화면 */
+.hero {
+  padding: 1.25rem 0.25rem 1.75rem;
+}
+
+.hero h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(1.75rem, 7.5vw, 2.5rem);
+  font-weight: 700;
+  line-height: 1.32;
+  letter-spacing: -0.03em;
+}
+
+.hero > p {
+  margin: 0.6rem 0 0;
+  color: var(--sub);
+  font-size: 1.0625rem;
+}
+
+.upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.upload-bar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  padding: 2rem 1rem max(1rem, env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, transparent, var(--bg) 40%);
+  pointer-events: none;
+}
+
+.upload-bar > * {
+  pointer-events: auto;
+}
+
+.upload-button {
+  display: flex;
+  width: 100%;
+  max-width: 38rem;
+  margin: 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 3.5rem;
+  border-radius: 16px;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.12s, transform 0.12s;
+}
+
+.upload-button:hover {
+  background: var(--primary-press);
+}
+
+.upload-button:active {
+  transform: scale(0.98);
+}
+
+.upload-button:focus-within {
+  outline: 3px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.upload-button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.upload-meter {
+  max-width: 38rem;
+  margin: 0 auto 0.6rem;
+}
+
+.upload-meter:empty {
+  display: none;
+}
+
+.note-list {
+  margin: 0;
+  padding: 0.4rem;
+  list-style: none;
+}
+
+.note-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 4.5rem;
+  padding: 0.8rem 0.5rem 0.8rem 0.8rem;
+  border-radius: 16px;
+  text-decoration: none;
+  transition: background-color 0.12s, transform 0.12s;
+}
+
+.note-row:hover {
+  background: color-mix(in srgb, var(--soft) 60%, transparent);
+}
+
+.note-row:active {
+  background: var(--soft);
+  transform: scale(0.985);
+}
+
+.note-row > svg.icon {
+  color: var(--muted);
+  width: 1.1em;
+  height: 1.1em;
+}
+
+.note-title {
+  display: block;
+  color: var(--ink);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.note-state {
+  margin-top: 0.35rem;
+  color: var(--blue-ink);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.note-state.failed {
+  color: var(--red-ink);
+}
+
+.note-state.quiet {
+  color: var(--sub);
+}
+
+.note-row .meter {
+  margin-top: 0.5rem;
+}
+
+.empty {
+  padding: 3rem 1rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* 회의 종류 */
+.template-picker {
+  margin-top: 1.25rem;
+}
+
+.chips {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0 -1rem;
+  padding: 0.1rem 1rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.chips::-webkit-scrollbar {
+  display: none;
+}
+
+.chip {
+  flex: none;
+  min-height: 2.5rem;
+  padding: 0.3rem 0.9rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--sub);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  transition: background-color 0.12s, color 0.12s, transform 0.12s;
+}
+
+.chip:active {
+  transform: scale(0.96);
+}
+
+.chip[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.chip-hint {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+/* 알림 켜기 */
+.push-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem;
+}
+
+.push-card[hidden] {
+  display: none;
+}
+
+.push-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 12px;
+  background: var(--blue-soft);
+  color: var(--primary);
+}
+
+.push-text strong {
+  display: block;
+  color: var(--ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.push-text span {
+  display: block;
+  color: var(--sub);
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.push-card .button {
+  min-height: 2.5rem;
+  padding: 0.3rem 0.9rem;
+  border-radius: 12px;
+  font-size: 0.9375rem;
+}
+
+/* 검색 */
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 3rem;
+  margin-bottom: 1.25rem;
+  padding: 0 1rem;
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.search-box:focus-within {
+  outline: 3px solid color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 3rem;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 1rem;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.search-input::placeholder {
+  color: var(--muted);
+}
+
+.search-results {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.search-results[hidden] {
+  display: none;
+}
+
+.search-result {
+  padding: 0.4rem;
+}
+
+.search-title {
+  display: block;
+  padding: 0.7rem 0.8rem 0.4rem;
+  text-decoration: none;
+}
+
+.search-hit {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  gap: 0.5rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 12px;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  text-decoration: none;
+}
+
+.search-hit:active {
+  background: var(--soft);
+}
+
+.search-tag {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.search-more {
+  margin: 0;
+  padding: 0.25rem 0.8rem 0.6rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.manage-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.75rem;
+  margin: 0.25rem;
+  color: var(--sub);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.template-text strong {
+  display: block;
+  font-weight: 600;
+}
+
+.template-text small {
+  display: block;
+  color: var(--sub);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.4;
+}

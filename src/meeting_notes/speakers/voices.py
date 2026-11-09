@@ -5,11 +5,12 @@
 
 import json
 import math
-import os
 import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+from meeting_notes.files import write_private
 
 # 같은 회의의 두 구간에서 잰 값은 같은 사람 0.81~0.93, 다른 사람 0.61 이하였다. 다른 이름을 붙이는 쪽이 더
 # 해로우므로 높게 잡았다. 날짜와 장소가 다른 회의에서는 점수가 낮아질 수 있어 녹음이 쌓이면 다시 재야 한다.
@@ -20,15 +21,6 @@ def cosine(a, b):
     dot = sum(x * y for x, y in zip(a, b))
     size = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
     return dot / size if size else 0.0
-
-
-def write_private(path, text):
-    """본인만 읽을 수 있는 권한으로 파일을 쓴다."""
-    temp = path.with_suffix(path.suffix + ".tmp")
-    descriptor = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as out:
-        out.write(text)
-    os.replace(temp, path)
 
 
 class VoiceBook:

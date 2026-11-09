@@ -8,11 +8,13 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-import company
-import meeting_notes
-from app import action_items, create_app
-from company import Company
-from trackers import Tracker, TrackerError, load_tracker
+from meeting_notes import llm, settings
+from meeting_notes.issues import Tracker, TrackerError, load_tracker
+from meeting_notes.issues.actions import action_items
+from meeting_notes.issues.drafting import draft_issues
+from meeting_notes.main import create_app
+from meeting_notes.pipeline.spelling import fix_spelling
+from meeting_notes.settings import Company
 
 EXAMPLE = Path(__file__).parent.parent / "company.example"
 
@@ -270,9 +272,9 @@ def test_draft_issues_requests_structured_output(monkeypatch):
                     captured.update(kwargs)
                     return Message()
 
-    monkeypatch.setattr(meeting_notes.anthropic, "Anthropic", Client)
+    monkeypatch.setattr(llm.anthropic, "Anthropic", Client)
     rules = {"categories": ["기능", "버그"], "priorities": [], "guide": "- 설명에는 완료 조건을 쓴다."}
-    assert meeting_notes.draft_issues({"title": "t"}, [{"index": 0}], {"people": []}, rules) == [{"title": "AI 검토"}]
+    assert draft_issues({"title": "t"}, [{"index": 0}], {"people": []}, rules) == [{"title": "AI 검토"}]
     schema = captured["output_config"]["format"]["schema"]["properties"]["items"]["items"]
     assert schema["properties"]["category"]["enum"] == ["기능", "버그"] and "priority" not in schema["properties"]
     assert set(schema["required"]) == set(schema["properties"])
@@ -347,23 +349,23 @@ def test_company_settings_are_read_from_folder(tmp_path):
         '[server]\nallowed_hosts = ["meet.example"]\n\n[spelling]\n"쿠버네티스" = "Kubernetes"\n', encoding="utf-8"
     )
     (tmp_path / "glossary.txt").write_text("로드 밸런서\n\n배포\n", encoding="utf-8")
-    settings = Company(tmp_path)
-    assert settings.allowed_hosts == ["meet.example"]
-    assert settings.spelling == {"에이아이": "AI", "쿠버네티스": "Kubernetes"}
-    assert settings.glossary == ["로드 밸런서", "배포"]
-    assert settings.knowledge_dir == tmp_path / "knowledge"
-    assert settings.tracker() is None
+    company = Company(tmp_path)
+    assert company.allowed_hosts == ["meet.example"]
+    assert company.spelling == {"에이아이": "AI", "쿠버네티스": "Kubernetes"}
+    assert company.glossary == ["로드 밸런서", "배포"]
+    assert company.knowledge_dir == tmp_path / "knowledge"
+    assert company.tracker() is None
     empty = Company(tmp_path / "없음")
-    assert empty.allowed_hosts == company.DEFAULT_ALLOWED_HOSTS and empty.glossary == []
+    assert empty.allowed_hosts == settings.DEFAULT_ALLOWED_HOSTS and empty.glossary == []
 
 
 def test_app_uses_company_hosts_and_spelling(tmp_path, monkeypatch):
     (tmp_path / "company.toml").write_text('[server]\nallowed_hosts = ["meet.example"]\n\n[spelling]\n"엔진엑스" = "nginx"\n', encoding="utf-8")
-    monkeypatch.setattr(company, "current", lambda: Company(tmp_path))
+    monkeypatch.setattr(settings, "current", lambda: Company(tmp_path))
     with TestClient(create_app(data_dir=tmp_path / "jobs", process=fake_process, tracker=None), base_url="http://meet.example") as client:
         assert client.get("/api/jobs").status_code == 200
         assert client.get("/api/jobs", headers={"Host": "127.0.0.1"}).status_code == 400
-    assert meeting_notes.fix_spelling("엔진엑스와 에이아이") == "nginx와 AI"
+    assert fix_spelling("엔진엑스와 에이아이") == "nginx와 AI"
 
 
 def test_example_tracker_is_loaded_from_company_folder(tmp_path):
@@ -379,8 +381,8 @@ def test_example_tracker_is_loaded_from_company_folder(tmp_path):
 
 
 def test_example_company_folder_is_valid():
-    settings = Company(EXAMPLE)
-    assert settings.config["tracker"]["module"] == "example_tracker"
-    assert settings.glossary and (settings.knowledge_dir / "meeting_context.md").exists()
-    terms = json.loads((settings.knowledge_dir / "terms.json").read_text(encoding="utf-8"))
+    company = Company(EXAMPLE)
+    assert company.config["tracker"]["module"] == "example_tracker"
+    assert company.glossary and (company.knowledge_dir / "meeting_context.md").exists()
+    terms = json.loads((company.knowledge_dir / "terms.json").read_text(encoding="utf-8"))
     assert all({"term", "definition"} <= set(term) for term in terms)

@@ -9,11 +9,14 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 
-import meeting_notes
-from app import create_app, search_pattern
-from note_templates import DEFAULT_TEMPLATE, TEMPLATES, system_prompt
-from push import VAPID_SUBJECT, PushCenter
-from voices import MATCH_THRESHOLD, VoiceBook, cosine
+from meeting_notes import llm
+from meeting_notes.jobs.search import search_pattern
+from meeting_notes.main import create_app
+from meeting_notes.notifications.push import VAPID_SUBJECT, PushCenter
+from meeting_notes.pipeline.notes import write_notes
+from meeting_notes.pipeline.templates import DEFAULT_TEMPLATE, TEMPLATES, system_prompt
+from meeting_notes.questions import answer_question
+from meeting_notes.speakers.voices import MATCH_THRESHOLD, VoiceBook, cosine
 
 NOTES = "# 회의록: 방화벽 교체\n\n## 요약\n- SPEAKER_00이 **본사 먼저** 교체를 제안했다. [00:01]\n"
 TURNS = [
@@ -167,6 +170,7 @@ def test_answer_question_caches_meeting_and_separates_question(monkeypatch):
     class Message:
         stop_reason = "end_turn"
         content = [Block()]
+        usage = None
 
     class Stream:
         def __enter__(self):
@@ -186,12 +190,12 @@ def test_answer_question_caches_meeting_and_separates_question(monkeypatch):
                     captured.update(kwargs)
                     return Stream()
 
-    monkeypatch.setattr(meeting_notes.anthropic, "Anthropic", Client)
-    assert meeting_notes.answer_question("전사문", "회의록", "질문") == "답변"
+    monkeypatch.setattr(llm.anthropic, "Anthropic", Client)
+    assert answer_question("전사문", "회의록", "질문") == "답변"
     blocks = captured["messages"][0]["content"]
     assert "cache_control" in blocks[0] and "전사문" in blocks[0]["text"] and "회의록" in blocks[0]["text"]
     assert "cache_control" not in blocks[1] and "질문" in blocks[1]["text"]
-    assert captured["model"] == meeting_notes.MODEL
+    assert captured["model"] == llm.MODEL
 
 
 # 양식
@@ -278,8 +282,8 @@ def test_write_notes_uses_template(monkeypatch):
                     captured.update(kwargs)
                     return Stream()
 
-    monkeypatch.setattr(meeting_notes.anthropic, "Anthropic", Client)
-    meeting_notes.write_notes("전사문", [], "technical")
+    monkeypatch.setattr(llm.anthropic, "Anthropic", Client)
+    write_notes("전사문", [], "technical")
     assert "## 대안 비교" in captured["system"]
 
 

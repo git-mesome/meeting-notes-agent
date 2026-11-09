@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import meeting_notes
+from meeting_notes import llm, settings
+from meeting_notes.pipeline import knowledge, notes, process, transcribe
 
 SEGMENTS = {
     "segments": [
@@ -36,14 +37,14 @@ def pipeline(monkeypatch):
         calls.transcript = transcript
         return "# 회의록: 예시", SimpleNamespace(input_tokens=11, output_tokens=22)
 
-    monkeypatch.setattr(meeting_notes, "transcribe", fake_transcribe)
-    monkeypatch.setattr(meeting_notes, "write_notes", fake_write_notes)
+    monkeypatch.setattr(process, "transcribe", fake_transcribe)
+    monkeypatch.setattr(process, "write_notes", fake_write_notes)
     return calls
 
 
 def test_saves_results_and_reports_stages(tmp_path, pipeline):
     stages = []
-    usage = meeting_notes.process_audio(tmp_path / "audio.m4a", tmp_path, ["용어"], stages.append)
+    usage = process.process_audio(tmp_path / "audio.m4a", tmp_path, ["용어"], stages.append)
 
     assert stages == ["transcribing", "writing"]
     assert pipeline.glossary == ["용어"]
@@ -58,7 +59,7 @@ def test_saves_results_and_reports_stages(tmp_path, pipeline):
 def test_skips_transcription_when_result_exists(tmp_path, pipeline):
     (tmp_path / "audio.json").write_text(json.dumps(SEGMENTS, ensure_ascii=False), encoding="utf-8")
     stages = []
-    meeting_notes.process_audio(tmp_path / "audio.m4a", tmp_path, [], stages.append)
+    process.process_audio(tmp_path / "audio.m4a", tmp_path, [], stages.append)
     assert pipeline.transcribe == 0
     assert stages == ["writing"]
 
@@ -73,7 +74,7 @@ def test_failed_transcription_reports_process_and_removes_partial_result(tmp_pat
     processes = []
 
     with pytest.raises(subprocess.CalledProcessError):
-        meeting_notes.transcribe(tmp_path / "audio.m4a", tmp_path, [], processes.append)
+        transcribe.transcribe(tmp_path / "audio.m4a", tmp_path, [], processes.append)
 
     assert processes[0].returncode == 3
     assert not (tmp_path / "audio.json").exists()
@@ -102,7 +103,7 @@ def test_transcribe_uses_normalized_audio_and_cleans_up(tmp_path, monkeypatch):
         ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", str(audio)],
         check=True,
     )
-    meeting_notes.transcribe(audio, tmp_path, [])
+    transcribe.transcribe(audio, tmp_path, [])
     args = (tmp_path / "args.txt").read_text(encoding="utf-8")
     assert "audio.normalized.wav" in args and "--vad_onset 0.2" in args and "--speaker_embeddings" in args
     assert (tmp_path / "audio.json").exists()
@@ -116,10 +117,10 @@ def test_transcribe_thread_count_follows_environment(tmp_path, monkeypatch):
     audio = tmp_path / "audio.m4a"
     audio.write_bytes(b"not audio")
     monkeypatch.delenv("WHISPER_THREADS", raising=False)
-    meeting_notes.transcribe(audio, tmp_path, [])
+    transcribe.transcribe(audio, tmp_path, [])
     assert "--threads 8" in (tmp_path / "args.txt").read_text(encoding="utf-8")
     monkeypatch.setenv("WHISPER_THREADS", "16")
-    meeting_notes.transcribe(audio, tmp_path, [])
+    transcribe.transcribe(audio, tmp_path, [])
     assert "--threads 16" in (tmp_path / "args.txt").read_text(encoding="utf-8")
 
 
@@ -127,7 +128,7 @@ def test_transcribe_falls_back_to_original_when_normalizing_fails(tmp_path, monk
     fake_whisperx(tmp_path, monkeypatch)
     audio = tmp_path / "audio.m4a"
     audio.write_bytes(b"not audio")
-    meeting_notes.transcribe(audio, tmp_path, [])
+    transcribe.transcribe(audio, tmp_path, [])
     assert str(audio) in (tmp_path / "args.txt").read_text(encoding="utf-8")
     assert (tmp_path / "audio.json").exists()
 
@@ -140,7 +141,7 @@ def test_failed_transcription_removes_temporary_files(tmp_path, monkeypatch):
         check=True,
     )
     with pytest.raises(subprocess.CalledProcessError):
-        meeting_notes.transcribe(audio, tmp_path, [])
+        transcribe.transcribe(audio, tmp_path, [])
     leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith("audio.") and p.name != "audio.m4a"]
     assert leftovers == []
 
@@ -157,23 +158,23 @@ def write_knowledge(root):
 
 def test_knowledge_lists_all_terms_and_defines_only_spoken_ones(tmp_path):
     write_knowledge(tmp_path)
-    text = meeting_notes.load_knowledge("[00:01] SPEAKER_00: 방 화벽 정책과 SYNC 결과를 봅시다.", tmp_path)
+    text = knowledge.load_knowledge("[00:01] SPEAKER_00: 방 화벽 정책과 SYNC 결과를 봅시다.", tmp_path)
     assert "홍길순 부장" in text
     assert "방화벽(firewall, FW)" in text and "토폴로지" in text
     defined = text.split("이 회의에 나온 용어의 뜻")[1]
     assert "- 방화벽: " in defined and "- 동기화: 장비 값을 모은다." in defined
     assert "토폴로지" not in defined
-    assert "가" * (meeting_notes.MAX_DEFINITION_CHARS + 1) not in defined
+    assert "가" * (knowledge.MAX_DEFINITION_CHARS + 1) not in defined
 
 
 def test_knowledge_is_empty_without_files(tmp_path):
-    assert meeting_notes.load_knowledge("전사문", tmp_path) == ""
+    assert knowledge.load_knowledge("전사문", tmp_path) == ""
 
 
 def test_write_notes_sends_knowledge_before_transcript(tmp_path, monkeypatch):
     (tmp_path / "knowledge").mkdir()
     write_knowledge(tmp_path / "knowledge")
-    monkeypatch.setattr(meeting_notes.company, "current", lambda: meeting_notes.company.Company(tmp_path))
+    monkeypatch.setattr(settings, "current", lambda: settings.Company(tmp_path))
     captured = {}
 
     class Stream:
@@ -191,15 +192,15 @@ def test_write_notes_sends_knowledge_before_transcript(tmp_path, monkeypatch):
     class Client:
         beta = SimpleNamespace(messages=SimpleNamespace(stream=lambda **kwargs: captured.update(kwargs) or Stream()))
 
-    monkeypatch.setattr(meeting_notes.anthropic, "Anthropic", Client)
-    meeting_notes.write_notes("전사문 내용", ["용어"])
+    monkeypatch.setattr(llm.anthropic, "Anthropic", Client)
+    notes.write_notes("전사문 내용", ["용어"])
     user = captured["messages"][0]["content"]
     assert user.index("<company_knowledge>") < user.index("<glossary>") < user.index("<transcript>")
     assert "표기를 바로잡고" in captured["system"]
-    assert f"{meeting_notes.MIN_NOTES_CHARS}자 이내" in captured["system"]
+    assert f"{notes.MIN_NOTES_CHARS}자 이내" in captured["system"]
 
 
 def test_load_glossary_ignores_blank_lines(tmp_path):
     path = tmp_path / "glossary.txt"
     path.write_text("방화벽\n\n  지점망  \n", encoding="utf-8")
-    assert meeting_notes.load_glossary(path) == ["방화벽", "지점망"]
+    assert knowledge.load_glossary(path) == ["방화벽", "지점망"]

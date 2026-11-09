@@ -52,7 +52,7 @@ HF_TOKEN=hf_...
 ANTHROPIC_API_KEY=sk-ant-...
 EOF
 
-uv run --env-file .env uvicorn app:create_app --factory
+uv run --env-file .env uvicorn meeting_notes.main:create_app --factory
 ```
 
 http://127.0.0.1:8000 을 연다. 첫 녹음을 처리할 때 전사와 화자 구분 모델을 내려받는다.
@@ -154,7 +154,7 @@ tailscale serve --bg --https=443 http://127.0.0.1:8000   # 웹 푸시용 HTTPS
 웹 서버 없이 녹음 하나를 처리한다. 결과는 `outputs/<파일 이름>/`에 저장한다.
 
 ```bash
-uv run --env-file .env python meeting_notes.py recordings/회의.m4a --template weekly
+uv run --env-file .env meeting-notes recordings/회의.m4a --template weekly
 ```
 
 ## 서버에 올리기
@@ -180,7 +180,7 @@ docker compose up -d --build
 
 ## 이슈 트래커 어댑터
 
-회사 폴더에 `trackers.Tracker`를 상속한 클래스와, 설정을 받아 그 객체를 돌려주는 `create(settings)` 함수를 둔 파일을 만든다. `create`가 `None`을 돌려주면(토큰이 없을 때 등) 연동하지 않는다. 예시 폴더의 `example_tracker.py`는 이슈를 `issues.json`에 저장하는 연습용 트래커로, 새 어댑터를 만들 때 복사해서 쓴다.
+회사 폴더에 `meeting_notes.issues.Tracker`를 상속한 클래스와, 설정을 받아 그 객체를 돌려주는 `create(settings)` 함수를 둔 파일을 만든다. `create`가 `None`을 돌려주면(토큰이 없을 때 등) 연동하지 않는다. 예시 폴더의 `example_tracker.py`는 이슈를 `issues.json`에 저장하는 연습용 트래커로, 새 어댑터를 만들 때 복사해서 쓴다.
 
 ```toml
 [tracker]
@@ -204,23 +204,38 @@ token_env = "JIRA_TOKEN"   # 토큰은 .env에 둔다
 | `create(issues)` | 이슈를 만들고 새 키를 같은 순서로 돌려준다. |
 | `comment(key, text)` | 댓글을 단다. |
 
-실패는 `trackers.TrackerError`로 알린다. 메시지는 화면에 그대로 보인다.
+실패는 `meeting_notes.issues.TrackerError`로 알린다. 메시지는 화면에 그대로 보인다.
 
 ## 프로젝트 구조
 
+`src/meeting_notes/` 패키지 하나에 계층별로 나눈다. 웹 계층(라우터)은 요청을 받아 서비스를 부르기만 하고, 업무 규칙은 서비스와 그 아래 모듈에 둔다.
+
 ```
-app.py              FastAPI 서버, 작업 큐, HTTP API
-auth.py             사내 SSO(OpenID Connect) 로그인
-meeting_notes.py    전사 파이프라인, Claude 호출, 명령줄 도구
-note_templates.py   회의 유형별 회의록 양식과 공통 문체 규칙
-company.py          회사 폴더 설정 읽기
-trackers.py         이슈 트래커 어댑터 규격
-voices.py           목소리 등록과 대조
-push.py             웹 푸시(VAPID)
-static/             화면(바닐라 JS SPA, 서비스 워커, PWA 매니페스트)
-company.example/    회사 폴더 예시와 연습용 트래커
-tests/              pytest, 화면 개발용 가짜 서버
+src/meeting_notes/
+├── main.py              앱 조립: 서비스를 만들어 연결하고 라우터·미들웨어를 붙인다
+├── settings.py          회사 폴더(company.toml)와 환경 변수 설정
+├── errors.py            화면에 보여 줄 오류(404, 409 등). 웹 계층이 HTTP 응답으로 바꾼다
+├── llm.py               Claude API 호출(모델, 공통 옵션)
+├── questions.py         회의 내용 질문
+├── cli.py               명령줄 도구(meeting-notes)
+├── web/                 HTTP 계층
+│   ├── routers/         API: jobs, notes, speakers, issues, push, auth
+│   ├── schemas.py       요청 본문 모델
+│   ├── deps.py          라우터에 서비스를 넣어 주는 의존성
+│   ├── middleware.py    보안 헤더, Host·Origin 검사, 로그인 검사
+│   ├── pages.py         index.html, 서비스 워커, 로그인 안내
+│   └── static/          화면: js/(화면별 ES 모듈), css/(화면별 스타일)
+├── jobs/                store(meta.json), worker(처리 큐), views, search, service
+├── pipeline/            audio → transcribe → turns → notes, process가 이어서 실행
+├── speakers/            화자 이름, 목소리 특징, 목소리 등록과 대조
+├── issues/              trackers(어댑터 규격), actions, drafting, service
+├── auth/                oidc(SSO 로그인), session(쿠키 서명)
+└── notifications/       웹 푸시(VAPID)
+company.example/         회사 폴더 예시와 연습용 트래커
+tests/                   pytest, 화면 개발용 가짜 서버
 ```
+
+스프링에 빗대면 `web/routers`가 `@RestController`, `jobs/service.py`와 `issues/service.py`가 `@Service`, `jobs/store.py`가 Repository, `web/schemas.py`가 DTO, `web/middleware.py`가 Filter, `web/deps.py`의 `Depends`가 생성자 주입, `main.py`가 `@Configuration`이다.
 
 ### 데이터
 

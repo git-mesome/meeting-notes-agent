@@ -7,6 +7,7 @@
     url = "..."          # 나머지 값은 어댑터의 create(settings)에 그대로 넘어간다
 
 어댑터 파일에는 Tracker를 상속한 클래스와, 설정을 받아 그 객체를 돌려주는 create(settings) 함수를 둔다.
+어댑터에서는 `from meeting_notes.issues import Tracker, TrackerError`로 가져온다.
 토큰은 company.toml이 아니라 .env에 두고 어댑터가 환경 변수에서 읽는다. 예시는 company.example/에 있다.
 """
 

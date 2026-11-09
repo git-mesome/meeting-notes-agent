@@ -1,0 +1,211 @@
+/* 이슈 트래커 등록 */
+
+.badge.draft {
+  background: var(--orange-soft);
+  color: var(--orange-ink);
+}
+
+/* 스크롤은 안쪽에서 해야 둥근 모서리 밖으로 스크롤 막대가 삐져나오지 않는다. */
+.sheet.tall {
+  overflow: hidden;
+}
+
+.sheet.tall .sheet-body {
+  max-height: 90vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+/* 이슈 트래커 등록 */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.notes .section-head h2 {
+  margin: 0;
+}
+
+.section-head .button {
+  flex: none;
+  min-height: 2.25rem;
+  padding: 0.3rem 0.85rem;
+  border-radius: 10px;
+  font-size: 0.875rem;
+}
+
+.issue-done {
+  margin: 0 0 0.6rem;
+  color: var(--sub);
+  font-size: 0.875rem;
+}
+
+.issue-key {
+  display: inline-block;
+  margin: 0 0.15rem;
+  padding: 0 0.4rem;
+  border-radius: 6px;
+  background: var(--green-soft);
+  color: var(--green-ink);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.drafted-at {
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.text-button {
+  min-height: 2rem;
+  padding: 0 0.25rem;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.draft-list {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.issue-draft {
+  padding: 0.85rem;
+  border-radius: 16px;
+  background: var(--soft);
+}
+
+.draft-head {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.draft-source {
+  color: var(--ink);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.draft-source span {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.select {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0 2.5rem 0 0.9rem;
+  border: 0;
+  border-radius: 12px;
+  /* 기본 화살표는 운영체제마다 모양이 달라 직접 그린다. */
+  appearance: none;
+  background: var(--surface) url("../icons/chevron-down.svg") no-repeat right 0.85rem center / 1rem;
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.draft-fields {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.draft-fields[hidden],
+.draft-skip[hidden] {
+  display: none;
+}
+
+.draft-fields .text-input {
+  min-height: 2.75rem;
+  margin-top: 0;
+  padding: 0 0.9rem;
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 1rem;
+}
+
+.draft-selects {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.draft-selects .draft-field:last-child {
+  grid-column: 1 / -1;
+}
+
+.draft-field {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.draft-field > span {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+/* 스크롤 영역의 아래 여백만큼 내려야 창 바닥에 붙는다. */
+.sheet-actions.sticky {
+  --sheet-bottom: max(1.25rem, env(safe-area-inset-bottom));
+  position: sticky;
+  bottom: calc(-1 * var(--sheet-bottom));
+  margin-bottom: calc(-1 * var(--sheet-bottom));
+  padding: 0.75rem 0 var(--sheet-bottom);
+  background: var(--surface);
+}
+
+.draft-details summary {
+  min-height: 2.25rem;
+  color: var(--sub);
+  font-size: 0.875rem;
+  line-height: 2.25rem;
+  cursor: pointer;
+}
+
+.draft-text {
+  display: block;
+  width: 100%;
+  min-height: 6rem;
+  padding: 0.75rem;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--body);
+  font: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.draft-skip {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.issue-results {
+  display: grid;
+  gap: 0.5rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9375rem;
+}

@@ -10,10 +10,9 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
-import auth as auth_module
-from app import create_app
-from auth import OIDC, Signer, safe_next
-from company import Company
+from meeting_notes.auth import OIDC, Signer, oidc as auth_module, safe_next
+from meeting_notes.main import create_app
+from meeting_notes.settings import Company
 
 ISSUER = "http://sso.example/oidc"
 DISCOVERY = {
@@ -126,7 +125,7 @@ def test_api_needs_login_and_pages_go_to_sso(tmp_path, sso):
         assert client.get("/api/jobs").status_code == 401
         page = client.get("/", follow_redirects=False)
         assert page.status_code == 303 and page.headers["location"] == "/auth/login?next=/"
-        assert client.get("/static/app.js").status_code == 200
+        assert client.get("/static/js/main.js").status_code == 200
         assert client.get("/sw.js").status_code == 200
 
 
@@ -219,8 +218,8 @@ def test_login_turns_on_only_where_public_url_is_set(tmp_path, monkeypatch):
     monkeypatch.delenv("PUBLIC_URL", raising=False)
     assert Company(tmp_path).auth(tmp_path / "keys") is None
     monkeypatch.setenv("PUBLIC_URL", "http://meet.example:8000/")
-    settings = Company(tmp_path)
-    oidc = settings.auth(tmp_path / "keys")
+    company = Company(tmp_path)
+    oidc = company.auth(tmp_path / "keys")
     assert oidc.redirect_uri == "http://meet.example:8000/auth/callback" and oidc.client_secret is None
-    assert "meet.example" in settings.allowed_hosts and "*.ts.net" in settings.allowed_hosts
+    assert "meet.example" in company.allowed_hosts and "*.ts.net" in company.allowed_hosts
     assert Company(tmp_path / "없음").auth(tmp_path) is None

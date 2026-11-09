@@ -1,0 +1,188 @@
+/* 화면 너비별 배치와 움직임 줄이기. 다른 파일보다 나중에 읽어야 한다. */
+
+@media (max-width: 859px) {
+  .tabs {
+    display: flex;
+  }
+
+  .panes {
+    display: block;
+  }
+
+  .panes > :last-child {
+    position: static;
+  }
+
+  .panes > [hidden-on-mobile] {
+    display: none;
+  }
+
+  .side-tabs {
+    display: none;
+  }
+
+  .qa-list {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .transcript {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .notes table,
+  .notes thead,
+  .notes tbody,
+  .notes tr,
+  .notes td {
+    display: block;
+  }
+
+  .notes thead {
+    display: none;
+  }
+
+  .notes tr {
+    padding: 0.85rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .notes tr:first-child {
+    padding-top: 0.15rem;
+  }
+
+  .notes tr:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+
+  .notes td,
+  .notes tr:last-child td {
+    display: grid;
+    grid-template-columns: 2.5rem minmax(0, 1fr);
+    gap: 0.5rem;
+    padding: 0.1rem 0;
+    border: 0;
+  }
+
+  .notes td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    line-height: 1.85;
+  }
+}
+
+@media (min-width: 860px) {
+  .topbar {
+    padding-right: 1rem;
+    padding-left: 1rem;
+  }
+
+  .hero {
+    padding-top: 2.5rem;
+  }
+
+  .upload-bar {
+    position: static;
+    margin-top: 1.5rem;
+    padding: 0;
+    background: none;
+  }
+
+  .upload-button {
+    width: auto;
+    max-width: none;
+    margin: 0;
+    padding: 0 2.5rem;
+    display: inline-flex;
+  }
+
+  .upload-meter {
+    margin: 0 0 0.6rem;
+    max-width: 22rem;
+  }
+
+  .dock {
+    right: 1rem;
+    bottom: 1rem;
+    left: 1rem;
+    max-width: 46rem;
+    margin: 0 auto;
+    padding: 0.6rem 0.75rem;
+    border-radius: 22px;
+    box-shadow: var(--float-shadow);
+  }
+
+  .sheet {
+    width: 24rem;
+    max-width: calc(100% - 2rem);
+    margin: auto;
+    border-radius: 26px;
+  }
+
+  .sheet.tall .sheet-body {
+    max-height: calc(100vh - 4rem);
+    padding-right: 2rem;
+    padding-left: 2rem;
+  }
+
+  .sheet.tall {
+    width: 44rem;
+    /* 가운데 정렬로 반 픽셀에 놓이면 Windows 배율에서 글자가 흐려져, 4px 단위로 맞춘다. */
+    margin: 2rem 0 auto max(1rem, round(down, calc((100% - 44rem) / 2), 4px));
+  }
+
+  /* 카드 첫 줄에 회의의 할 일과 처리 방법을 두고, 아래에 이슈 내용을 채운다. */
+  .issue-draft {
+    padding: 1.1rem 1.25rem;
+  }
+
+  .draft-head {
+    grid-template-columns: minmax(0, 1fr) 12rem;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .draft-fields {
+    margin-top: 0.85rem;
+  }
+
+  .draft-selects {
+    grid-template-columns: 1fr 1fr 1.6fr;
+  }
+
+  .draft-selects .draft-field:last-child {
+    grid-column: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badge.pop,
+  .sheet[open],
+  .toast,
+  .wave i {
+    animation: none;
+  }
+
+  .wave i {
+    transform: scaleY(0.6);
+  }
+
+  .qa-pending {
+    animation: none;
+  }
+
+  .meter-fill,
+  .button,
+  .upload-button,
+  .icon-button,
+  .note-row,
+  .time-ref,
+  .dock-play,
+  .sheet-item {
+    transition: none;
+  }
+}

@@ -7,8 +7,8 @@ import json
 import os
 import time
 
-from app import create_app
-from trackers import Tracker
+from meeting_notes.issues import Tracker
+from meeting_notes.main import create_app
 
 SAMPLE_NOTES = """# 회의록: 3분기 방화벽 교체 일정 점검
 

@@ -3,7 +3,7 @@
 import os
 import tempfile
 
-import company
+from meeting_notes import settings
 
 os.environ["COMPANY_DIR"] = tempfile.mkdtemp(prefix="company-")
-company.current.cache_clear()
+settings.current.cache_clear()

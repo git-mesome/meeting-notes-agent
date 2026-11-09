@@ -1,4 +1,5 @@
-from meeting_notes import fix_spelling, format_time, format_transcript, is_hallucination, to_turns
+from meeting_notes.pipeline.spelling import fix_spelling
+from meeting_notes.pipeline.turns import format_time, format_transcript, is_hallucination, to_turns
 
 
 def word(text, start, end, speaker=None):
