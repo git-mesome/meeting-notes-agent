@@ -11,13 +11,15 @@ MAX_TERM_DEFINITIONS = 40
 MAX_DEFINITION_CHARS = 200
 
 
-def load_knowledge(transcript, root=None):
-    """용어는 이름을 모두 넣고, 정의는 전사문에 나온 것만 넣는다."""
+def load_knowledge(transcript, root=None, facts=()):
+    """용어는 이름을 모두 넣고, 정의는 전사문에 나온 것만 넣는다. facts는 사용자가 확인해 준 사실(memory.py)이다."""
     root = Path(root) if root else settings.current().knowledge_dir
     parts = []
     context = root / "meeting_context.md"
     if context.exists():
         parts.append(fix_spelling(context.read_text(encoding="utf-8").strip()))
+    if facts:
+        parts.append("## 사용자가 지난 회의에서 확인한 사실\n" + "\n".join(f"- {fact}" for fact in facts))
     terms_path = root / "terms.json"
     if terms_path.exists():
         terms = json.loads(terms_path.read_text(encoding="utf-8"))

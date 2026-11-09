@@ -19,7 +19,7 @@ def update_notes(job_id: str, body: NotesUpdate, jobs: Jobs):
 @router.put("/jobs/{job_id}/checks/{index}")
 def set_check(job_id: str, index: int, body: CheckUpdate, jobs: Jobs):
     """확인 필요 항목에 확인 표시를 한다."""
-    return jobs.set_check(job_id, index, body.done)
+    return jobs.set_check(job_id, index, body.done, body.note, body.remember)
 
 
 @router.post("/jobs/{job_id}/confirm")

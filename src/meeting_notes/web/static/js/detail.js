@@ -285,8 +285,8 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
   state.cleanup = () => audio.pause();
 
   // 확인 필요 항목의 체크는 바로 저장한다. 내용은 그대로라 화면을 다시 그리지 않는다.
-  const onCheck = async (index, done) => {
-    const updated = await api(`/api/jobs/${job.id}/checks/${index}`, jsonOptions("PUT", { done }));
+  const onCheck = async (index, body) => {
+    const updated = await api(`/api/jobs/${job.id}/checks/${index}`, jsonOptions("PUT", body));
     job.notes = updated.notes;
   };
   const article = renderNotes(friendly(job.notes), seek, { onCheck });

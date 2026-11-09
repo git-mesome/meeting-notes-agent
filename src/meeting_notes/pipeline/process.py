@@ -9,7 +9,13 @@ from meeting_notes.pipeline.turns import format_transcript, to_turns
 
 
 def process_audio(
-    audio, out_dir, glossary, on_stage=lambda stage: None, on_process=lambda process: None, template=DEFAULT_TEMPLATE
+    audio,
+    out_dir,
+    glossary,
+    on_stage=lambda stage: None,
+    on_process=lambda process: None,
+    template=DEFAULT_TEMPLATE,
+    facts=(),
 ):
     """결과를 out_dir에 저장하고 사용한 토큰 수를 돌려준다. 전사 JSON이 있으면 전사를 건너뛴다.
 
@@ -27,6 +33,6 @@ def process_audio(
     (out_dir / "turns.json").write_text(json.dumps(turns, ensure_ascii=False), encoding="utf-8")
 
     on_stage("writing")
-    notes, usage = write_notes(transcript, glossary, template)
+    notes, usage = write_notes(transcript, glossary, template, facts)
     (out_dir / "notes.md").write_text(notes + "\n", encoding="utf-8")
     return {"input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens}

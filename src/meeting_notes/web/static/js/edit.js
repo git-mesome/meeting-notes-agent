@@ -1,7 +1,7 @@
 /* 회의록 카드를 그 자리에서 고친다. 고친 카드만 마크다운으로 되돌려 회의록 전체에서 바꿔 끼운다. */
 
 import { api, jsonOptions } from "./api.js";
-import { storedText } from "./notes.js";
+import { CHECK_NOTE, storedText } from "./notes.js";
 import { state } from "./state.js";
 import { button, el, icon, toast } from "./ui.js";
 
@@ -42,7 +42,8 @@ export function sectionMarkdown(section, headingLine) {
       for (const item of node.children) {
         if (item.matches(".check-item")) {
           const body = text(item.querySelector(".check-text"));
-          if (body) lines.push(`- ${item.querySelector("input").checked ? "[x] " : ""}${body}`);
+          const note = item.dataset.note ? `${CHECK_NOTE}${item.dataset.note}` : "";
+          if (body) lines.push(`- ${item.querySelector("input").checked ? "[x] " : ""}${body}${note}`);
         } else if (text(item)) {
           lines.push(`- ${text(item)}`);
         }
@@ -112,7 +113,13 @@ function startEditing(section, job, onSaved) {
       if (event.key === "Enter" && field.matches(SINGLE_LINE)) event.preventDefault();
     });
   }
-  for (const chip of section.querySelectorAll(".time-ref")) chip.contentEditable = "false";
+  for (const chip of section.querySelectorAll(".time-ref")) {
+    chip.contentEditable = "false";
+    // 줄 끝이 시각 칩이면 End로 간 커서 뒤에 글자를 칠 수 없어서, 보이지 않는 글자를 하나 둔다(저장할 때 지운다).
+    const next = chip.nextSibling;
+    if (!next) chip.after(document.createTextNode("\u200b"));
+    else if (next.nodeType === Node.TEXT_NODE && !next.textContent && !next.nextSibling) next.textContent = "\u200b";
+  }
   fields[0]?.focus();
 
   const onInput = () => {

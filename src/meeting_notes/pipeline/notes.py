@@ -12,11 +12,11 @@ NOTES_LENGTH_RATIO = 0.2
 MIN_NOTES_CHARS = 800
 
 
-def write_notes(transcript, glossary, template=DEFAULT_TEMPLATE):
+def write_notes(transcript, glossary, template=DEFAULT_TEMPLATE, facts=()):
     user = f"<transcript>\n{transcript}\n</transcript>"
     if glossary:
         user = f"<glossary>\n{chr(10).join(glossary)}\n</glossary>\n\n{user}"
-    knowledge = load_knowledge(transcript)
+    knowledge = load_knowledge(transcript, facts=facts)
     if knowledge:
         user = f"<company_knowledge>\n{knowledge}\n</company_knowledge>\n\n{user}"
     system = system_prompt(template, max(MIN_NOTES_CHARS, int(len(transcript) * NOTES_LENGTH_RATIO)))

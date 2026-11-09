@@ -105,7 +105,8 @@ company/
 
 - 녹음을 올릴 때 회의 양식을 고른다. 완성한 뒤에도 다른 양식으로 다시 쓸 수 있다.
 - 회의록은 사람이 확인하고 수정한 뒤 확정한다. 카드마다 있는 "수정"을 누르면 그 자리에서 고치고, 목록은 Enter로 항목을 더하며 표는 "행 추가"로 행을 더한다. 마크다운 전체는 더보기의 "마크다운으로 전체 수정"에서 고친다. 시각 표시를 누르면 그 부분부터 들을 수 있다.
-- "확인 필요" 항목은 오른쪽 체크 상자로 직접 확인했는지 표시한다. 회의록에는 `- [x]`로 남고, 내용을 바꾼 것이 아니므로 확정은 풀리지 않는다.
+- "확인 필요" 항목은 오른쪽 체크 상자로 직접 확인했는지 표시한다. 체크할 때 확인한 내용(예: "홍길동 부장님이 맞음")을 적으면 회의록에 `- [x] 항목 — 확인: 내용`으로 남는다. 내용을 바꾼 것이 아니므로 확정은 풀리지 않는다.
+- "다음 회의에도 AI가 알게 하기"를 켜면 확인한 내용을 `jobs/memory.json`에 기억하고, 다음 회의록을 쓰고 질문에 답할 때 이름과 표기를 바로잡는 데 쓴다. 회의에 나오지 않은 사실을 회의록에 넣지는 않고, 음성 인식 단계에는 넣지 않는다. 첫 화면의 "AI가 기억하는 내용"에서 보고 지운다.
 - 화자는 말한 부분을 들어 보고 이름을 정한다. 이름은 회의록, 전사문, 내려받은 파일에 함께 적용된다.
 - "다음 회의에서도 이 목소리 알아보기"를 켜면 다음 회의부터 같은 사람에게 이름이 자동으로 붙는다.
 - 회의 내용을 질문하면 근거 시각과 함께 답한다. 첫 화면에서 지난 회의의 회의록과 전사문을 검색한다.
@@ -219,6 +220,7 @@ src/meeting_notes/
 ├── errors.py            화면에 보여 줄 오류(404, 409 등). 웹 계층이 HTTP 응답으로 바꾼다
 ├── llm.py               Claude API 호출(모델, 공통 옵션)
 ├── questions.py         회의 내용 질문
+├── memory.py            사용자가 확인해 준 사실(다음 회의에 참고)
 ├── cli.py               명령줄 도구(meeting-notes)
 ├── web/                 HTTP 계층
 │   ├── routers/         API: jobs, notes, speakers, issues, push, auth
@@ -254,6 +256,7 @@ tests/                   pytest, 화면 개발용 가짜 서버
 | `jobs/<id>/speaker_embeddings.json` | 화자별 목소리 특징(권한 600) |
 | `jobs/<id>/issue_drafts.json` | 이슈 초안 |
 | `jobs/voices.json` | 등록한 목소리(권한 600) |
+| `jobs/memory.json` | AI가 기억하는 내용(권한 600) |
 | `jobs/push-key.pem`, `jobs/push-subscriptions.json` | 웹 푸시 키와 구독 정보 |
 | `jobs/session-key` | 로그인 쿠키 서명 키(권한 600) |
 
@@ -270,7 +273,8 @@ tests/                   pytest, 화면 개발용 가짜 서버
 | `POST` | `/api/jobs/{id}/cancel`, `/retry` | 중지, 다시 시작 |
 | `PUT` | `/api/jobs/{id}/notes` | 회의록 수정 |
 | `POST` | `/api/jobs/{id}/confirm` | 확정 |
-| `PUT` | `/api/jobs/{id}/checks/{index}` | 확인 필요 항목에 확인 표시 |
+| `PUT` | `/api/jobs/{id}/checks/{index}` | 확인 필요 항목에 확인 표시, 확인한 내용 기억 |
+| `GET`, `DELETE` | `/api/memory`, `/api/memory/{id}` | AI가 기억하는 내용, 지우기 |
 | `POST` | `/api/jobs/{id}/regenerate` | 다른 양식으로 다시 쓰기 |
 | `PUT` | `/api/jobs/{id}/speakers/{label}` | 화자 이름 지정, 목소리 등록 |
 | `POST` | `/api/jobs/{id}/ask` | 질문 |

@@ -11,6 +11,7 @@
     auth/            사내 SSO 로그인
     notifications/   웹 푸시
     questions.py     회의 내용 질문
+    memory.py        사용자가 확인해 준 사실(다음 회의에 참고)
     llm.py           Claude API 호출
     cli.py           명령줄 도구
 """

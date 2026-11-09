@@ -3,6 +3,7 @@ import { renderDetail } from "./detail.js";
 import { renderList } from "./list.js";
 import { setScreen } from "./screen.js";
 import { el } from "./ui.js";
+import { renderMemory } from "./memory.js";
 import { renderVoices } from "./voices.js";
 import { renderWaiting } from "./waiting.js";
 
@@ -19,6 +20,10 @@ export async function route() {
   try {
     if (location.hash === "#/voices") {
       await renderVoices();
+      return;
+    }
+    if (location.hash === "#/memory") {
+      await renderMemory();
       return;
     }
     if (!match) {

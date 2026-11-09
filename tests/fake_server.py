@@ -47,7 +47,7 @@ SAMPLE_TURNS = [
 SAMPLE_EMBEDDINGS = {"SPEAKER_00": [1.0, 0.0, 0.0], "SPEAKER_01": [0.0, 1.0, 0.0], "SPEAKER_02": [0.0, 0.0, 1.0]}
 
 
-def fake_answer(_transcript, _notes, question):
+def fake_answer(_transcript, _notes, question, facts=()):
     time.sleep(1)
     return f"'{question}'에 대한 예시 답변이에요. 본사부터 교체하기로 했어요. [00:12] [01:05]"
 

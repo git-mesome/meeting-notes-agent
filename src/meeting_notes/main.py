@@ -16,6 +16,7 @@ from meeting_notes.issues.service import IssueService, link_issues
 from meeting_notes.jobs.service import JobService
 from meeting_notes.jobs.store import JobStore
 from meeting_notes.jobs.worker import Worker
+from meeting_notes.memory import MemoryBook
 from meeting_notes.notifications.push import PushCenter
 from meeting_notes.pipeline.templates import DEFAULT_TEMPLATE
 from meeting_notes.speakers.voices import VoiceBook
@@ -24,6 +25,7 @@ from meeting_notes.web.deps import Services
 from meeting_notes.web.routers import auth as auth_routes
 from meeting_notes.web.routers import issues as issue_routes
 from meeting_notes.web.routers import jobs as job_routes
+from meeting_notes.web.routers import memory as memory_routes
 from meeting_notes.web.routers import notes as notes_routes
 from meeting_notes.web.routers import push as push_routes
 from meeting_notes.web.routers import speakers as speaker_routes
@@ -33,13 +35,15 @@ def default_process(audio, out_dir, on_stage, on_process):
     from meeting_notes.pipeline.process import process_audio
 
     template = json.loads((out_dir / "meta.json").read_text(encoding="utf-8")).get("template", DEFAULT_TEMPLATE)
-    return process_audio(audio, out_dir, settings.current().glossary, on_stage, on_process, template)
+    # 작업 폴더는 결과 폴더 바로 아래에 있다. 사용자가 확인해 준 사실도 결과 폴더에 있다.
+    facts = MemoryBook(out_dir.parent).facts()
+    return process_audio(audio, out_dir, settings.current().glossary, on_stage, on_process, template, facts)
 
 
-def default_answer(transcript, notes_text, question):
+def default_answer(transcript, notes_text, question, facts=()):
     from meeting_notes.questions import answer_question
 
-    return answer_question(transcript, notes_text, question)
+    return answer_question(transcript, notes_text, question, facts)
 
 
 def default_draft(meeting, actions, space, rules):
@@ -67,13 +71,15 @@ def create_app(
 
     store = JobStore(data_dir)
     voices = VoiceBook(data_dir)
+    memory = MemoryBook(data_dir)
     push_center = PushCenter(data_dir, send=push_send)
     worker = Worker(store, process, voices, push_center)
-    job_service = JobService(store, worker, voices, answer, issue_links=link_issues(tracker))
+    job_service = JobService(store, worker, voices, answer, issue_links=link_issues(tracker), memory=memory)
     services = Services(
         jobs=job_service,
         issues=IssueService(tracker, job_service, draft),
         voices=voices,
+        memory=memory,
         push=push_center,
         auth=auth,
     )
@@ -92,7 +98,7 @@ def create_app(
     async def app_error(_request, error):
         return JSONResponse({"detail": error.message}, status_code=error.status)
 
-    for routes in (job_routes, notes_routes, speaker_routes, issue_routes, push_routes, auth_routes, pages):
+    for routes in (job_routes, notes_routes, speaker_routes, memory_routes, issue_routes, push_routes, auth_routes, pages):
         app.include_router(routes.router)
     app.mount("/static", StaticFiles(directory=pages.STATIC_DIR), name="static")
     return app

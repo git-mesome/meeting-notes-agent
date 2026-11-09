@@ -14,13 +14,13 @@ ASK_PROMPT = """사내 회의의 전사문과 회의록을 근거로 사용자�
 - 핵심부터 짧게, 친근한 해요체로 답한다. 표나 제목 없이 문장과 짧은 목록만 쓴다."""
 
 
-def answer_question(transcript, notes, question):
+def answer_question(transcript, notes, question, facts=()):
     """같은 회의를 이어서 물을 때 비용이 줄도록 회의 내용 블록을 캐시한다."""
     content = [
         {
             "type": "text",
             "text": (
-                f"<company_knowledge>\n{load_knowledge(transcript)}\n</company_knowledge>\n\n"
+                f"<company_knowledge>\n{load_knowledge(transcript, facts=facts)}\n</company_knowledge>\n\n"
                 f"<notes>\n{notes}\n</notes>\n\n<transcript>\n{transcript}\n</transcript>"
             ),
             "cache_control": {"type": "ephemeral"},

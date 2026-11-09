@@ -61,26 +61,93 @@ export function renderTable(lines, onTime) {
   );
 }
 
-// "확인 필요" 항목. 오른쪽 체크 상자로 직접 확인했는지 표시한다.
+// 확인한 내용은 항목 뒤에 "— 확인: 내용"으로 붙어 있다(jobs/service.py).
+export const CHECK_NOTE = " — 확인: ";
+
+// 체크할 때 확인한 내용을 적고, 다음 회의에도 AI가 알게 할지 고른다.
+function checkForm(note, onSubmit, onCancel) {
+  const input = el("input", {
+    class: "text-input check-input",
+    type: "text",
+    maxlength: 300,
+    placeholder: "확인한 내용 (예: 홍길동 부장님이 맞음)",
+    "aria-label": "확인한 내용",
+  });
+  input.value = note;
+  const remember = el("input", { type: "checkbox" });
+  remember.checked = true;
+  const submit = button("확인", { variant: "primary", onclick: () => onSubmit(input.value.trim(), remember.checked, submit) });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") submit.click();
+    if (event.key === "Escape") onCancel();
+  });
+  const form = el(
+    "div",
+    { class: "check-form", "data-ui": "" },
+    input,
+    el("label", { class: "check-remember" }, remember, "다음 회의에도 AI가 알게 하기"),
+    el("div", { class: "check-form-actions" }, button("취소", { onclick: onCancel }), submit),
+  );
+  setTimeout(() => input.focus());
+  return form;
+}
+
+// "확인 필요" 항목. 오른쪽 체크 상자로 직접 확인했는지 표시하고, 확인한 내용을 남긴다.
 function checkItem(text, done, index, onTime, onCheck) {
+  const split = text.lastIndexOf(CHECK_NOTE);
+  const body = split >= 0 ? text.slice(0, split) : text;
   const box = el("input", { type: "checkbox", class: "check-box", "aria-label": "확인함" });
   box.checked = done;
+  const noteLine = el("span", { class: "check-note", "data-ui": "" });
   const item = el(
     "li",
     { class: `check-item${done ? " done" : ""}` },
-    el("span", { class: "check-text" }, ...inline(text, onTime)),
+    el("div", { class: "check-body" }, el("span", { class: "check-text" }, ...inline(body, onTime)), noteLine),
     el("label", { class: "check-hit", "data-ui": "" }, box),
   );
+  const showNote = (note) => {
+    item.dataset.note = note;
+    noteLine.textContent = note ? `확인: ${note}` : "";
+    noteLine.hidden = !note;
+  };
+  showNote(split >= 0 ? text.slice(split + CHECK_NOTE.length) : "");
+
   box.addEventListener("change", async () => {
-    item.classList.toggle("done", box.checked);
     if (!onCheck) return;
-    try {
-      await onCheck(index, box.checked);
-    } catch (error) {
-      box.checked = !box.checked;
-      item.classList.toggle("done", box.checked);
-      toast(error.message, true);
+    if (!box.checked) {
+      item.classList.remove("done");
+      try {
+        await onCheck(index, { done: false });
+        showNote("");
+      } catch (error) {
+        box.checked = true;
+        item.classList.add("done");
+        toast(error.message, true);
+      }
+      return;
     }
+    // 확인한 내용을 적고 나서야 체크된다.
+    box.checked = false;
+    item.closest("ul").querySelector(".check-form")?.remove();
+    const form = checkForm(
+      item.dataset.note,
+      async (note, remember, submit) => {
+        submit.disabled = true;
+        try {
+          await onCheck(index, { done: true, note, remember });
+          box.checked = true;
+          item.classList.add("done");
+          showNote(note);
+          form.remove();
+          if (note && remember) toast("다음 회의에도 기억할게요");
+        } catch (error) {
+          toast(error.message, true);
+          submit.disabled = false;
+        }
+      },
+      () => form.remove(),
+    );
+    item.after(form);
   });
   return item;
 }

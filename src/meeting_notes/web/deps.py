@@ -11,6 +11,7 @@ from fastapi import Depends, Request
 from meeting_notes.auth import OIDC
 from meeting_notes.issues.service import IssueService
 from meeting_notes.jobs.service import JobService
+from meeting_notes.memory import MemoryBook
 from meeting_notes.notifications.push import PushCenter
 from meeting_notes.speakers.voices import VoiceBook
 
@@ -20,6 +21,7 @@ class Services:
     jobs: JobService
     issues: IssueService
     voices: VoiceBook
+    memory: MemoryBook
     push: PushCenter
     auth: OIDC | None
 
@@ -40,6 +42,10 @@ def voice_book(request: Request) -> VoiceBook:
     return services(request).voices
 
 
+def memory_book(request: Request) -> MemoryBook:
+    return services(request).memory
+
+
 def push_center(request: Request) -> PushCenter:
     return services(request).push
 
@@ -56,6 +62,7 @@ def current_user(request: Request) -> dict | None:
 Jobs = Annotated[JobService, Depends(job_service)]
 Issues = Annotated[IssueService, Depends(issue_service)]
 Voices = Annotated[VoiceBook, Depends(voice_book)]
+Memory = Annotated[MemoryBook, Depends(memory_book)]
 Push = Annotated[PushCenter, Depends(push_center)]
 Auth = Annotated[OIDC | None, Depends(login)]
 User = Annotated[dict | None, Depends(current_user)]

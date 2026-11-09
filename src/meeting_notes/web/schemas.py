@@ -9,6 +9,8 @@ class NotesUpdate(BaseModel):
 
 class CheckUpdate(BaseModel):
     done: bool
+    note: str = Field(default="", max_length=300)
+    remember: bool = False
 
 
 class SpeakerName(BaseModel):

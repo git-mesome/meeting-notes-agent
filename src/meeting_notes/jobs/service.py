@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 STILL_STOPPING_MESSAGE = "아직 멈추는 중이에요. 잠시 후 다시 시도해 주세요."
 # "확인 필요" 항목의 확인 표시. 확인한 항목은 "- [x] 내용"으로 적는다.
 CHECK_ITEM = re.compile(r"^\s*[-*]\s+(?:\[[ xX]\]\s+)?")
+# 확인한 내용은 항목 뒤에 "— 확인: 내용"으로 붙인다.
+CHECK_NOTE = " — 확인: "
+TIME_REFS = re.compile(r"\s*\[\d{1,2}:\d{2}(?::\d{2})?\]")
 
 
 def require_template(template):
@@ -33,13 +36,15 @@ def require_template(template):
 
 
 class JobService:
-    def __init__(self, store, worker, voices, answer, issue_links=None):
+    def __init__(self, store, worker, voices, answer, issue_links=None, memory=None):
         self.store = store
         self.worker = worker
         self.voices = voices
         self.answer = answer
         # 등록한 이슈에 트래커 주소를 붙인다(issues.service.link_issues).
         self.issue_links = issue_links or (lambda items: items)
+        # 사용자가 확인해 준 사실(memory.MemoryBook). 질문 답변과 다음 회의록에 참고한다.
+        self.memory = memory
 
     # 읽기
 
@@ -208,8 +213,11 @@ class JobService:
         self.store.update(job_id, title=notes_title(notes, job["name"]), confirmed_at=None)
         return self.detail(job_id)
 
-    def set_check(self, job_id, index, done):
-        """확인 필요 절의 index번째 항목에 확인 표시를 하거나 지운다. 내용은 그대로라 확정은 풀지 않는다."""
+    def set_check(self, job_id, index, done, note="", remember=False):
+        """확인 필요 절의 index번째 항목에 확인 표시를 하거나 지운다. 내용은 그대로라 확정은 풀지 않는다.
+
+        note는 확인한 내용이다. remember면 다음 회의에도 AI가 알도록 기억한다.
+        """
         job = self.get(job_id)
         self.require_done(job)
         lines = self.notes(job_id).split("\n")
@@ -221,12 +229,19 @@ class JobService:
             if in_checks and CHECK_ITEM.match(line):
                 count += 1
                 if count == index:
-                    body = CHECK_ITEM.sub("", line, count=1)
-                    lines[number] = f"- [x] {body}" if done else f"- {body}"
+                    body = CHECK_ITEM.sub("", line, count=1).split(CHECK_NOTE, 1)[0].rstrip()
+                    note = " ".join(note.split())
+                    if done:
+                        lines[number] = f"- [x] {body}{CHECK_NOTE}{note}" if note else f"- [x] {body}"
+                    else:
+                        lines[number] = f"- {body}"
                     break
         else:
             raise NotFound("확인할 항목을 찾을 수 없어요.")
         self.write_notes(job_id, "\n".join(lines))
+        if done and note and remember and self.memory is not None:
+            question = apply_speaker_names(TIME_REFS.sub("", body), self.speakers(job)).strip()
+            self.memory.add(question, note, job_id)
         return self.detail(job_id)
 
     def rename_speaker(self, job_id, label, name, remember):
@@ -259,7 +274,8 @@ class JobService:
         transcript = apply_speaker_names(format_transcript(turns), speakers)
         question = question.strip()
         try:
-            text = self.answer(transcript, self.named_notes(job, speakers), question)
+            facts = self.memory.facts() if self.memory is not None else []
+            text = self.answer(transcript, self.named_notes(job, speakers), question, facts=facts)
         except Exception as error:
             logger.error("작업 %s 질문에 답하지 못했다", job_id, exc_info=error)
             raise Upstream("답을 받지 못했어요. 잠시 후 다시 시도해 주세요.") from error

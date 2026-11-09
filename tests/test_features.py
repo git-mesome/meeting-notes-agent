@@ -113,7 +113,7 @@ def test_search_treats_query_as_text(client, tone):
 def test_ask_uses_speaker_names_and_keeps_history(tmp_path, tone):
     seen = {}
 
-    def answer(transcript, notes, question):
+    def answer(transcript, notes, question, facts=()):
         seen.update(transcript=transcript, notes=notes, question=question)
         return "본사부터예요. [00:01]"
 
