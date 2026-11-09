@@ -234,7 +234,7 @@ export async function renderList() {
         "div",
         { class: "manage-links" },
         el("a", { class: "manage-link", href: "#/voices" }, icon("voice"), "등록한 목소리 관리"),
-        el("a", { class: "manage-link", href: "#/memory" }, icon("check"), "AI가 기억하는 내용"),
+        el("a", { class: "manage-link", href: "#/memory" }, icon("check"), "등록한 이름·표기 관리"),
       ),
     );
     if (jobs.some(isActive)) state.pollTimer = setTimeout(refresh, POLL_MS);

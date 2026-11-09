@@ -64,7 +64,8 @@ export function renderTable(lines, onTime) {
 // 확인한 내용은 항목 뒤에 "— 확인: 내용"으로 붙어 있다(jobs/service.py).
 export const CHECK_NOTE = " — 확인: ";
 
-// 체크할 때 확인한 내용을 적고, 다음 회의에도 AI가 알게 할지 고른다.
+// 체크할 때 확인한 내용을 적고, 이름·표기를 바로잡은 것이면 다음 회의록에도 쓰도록 등록한다.
+// 회의마다 다른 확인("미정", "그런 말 없음")까지 쌓이지 않도록 기본은 끈다.
 function checkForm(note, onSubmit, onCancel) {
   const input = el("input", {
     class: "text-input check-input",
@@ -75,7 +76,6 @@ function checkForm(note, onSubmit, onCancel) {
   });
   input.value = note;
   const remember = el("input", { type: "checkbox" });
-  remember.checked = true;
   const submit = button("확인", { variant: "primary", onclick: () => onSubmit(input.value.trim(), remember.checked, submit) });
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter") submit.click();
@@ -85,7 +85,19 @@ function checkForm(note, onSubmit, onCancel) {
     "div",
     { class: "check-form", "data-ui": "" },
     input,
-    el("label", { class: "check-remember" }, remember, "다음 회의에도 AI가 알게 하기"),
+    el(
+      "label",
+      { class: "check-row" },
+      remember,
+      el(
+        "span",
+        {},
+        el("strong", { text: "다음 회의록에도 이 이름·표기 쓰기" }),
+        el("small", {
+          text: "사람 이름이나 용어를 바로잡았을 때만 켜 주세요. AI를 다시 학습시키지는 않고, 다음 회의록을 쓸 때 참고 메모로 넘겨요.",
+        }),
+      ),
+    ),
     el("div", { class: "check-form-actions" }, button("취소", { onclick: onCancel }), submit),
   );
   setTimeout(() => input.focus());
@@ -139,7 +151,7 @@ function checkItem(text, done, index, onTime, onCheck) {
           item.classList.add("done");
           showNote(note);
           form.remove();
-          if (note && remember) toast("다음 회의에도 기억할게요");
+          if (note && remember) toast("다음 회의록부터 이 표기를 참고해요");
         } catch (error) {
           toast(error.message, true);
           submit.disabled = false;

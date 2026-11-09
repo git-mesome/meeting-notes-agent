@@ -793,21 +793,8 @@
   font-size: 1rem;
 }
 
-.check-remember {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-height: 2.25rem;
-  color: var(--sub);
-  font-size: 0.875rem;
-  cursor: pointer;
-}
-
-.check-remember input {
-  width: 1.05rem;
-  height: 1.05rem;
-  margin: 0;
-  accent-color: var(--primary);
+.check-form .check-row {
+  margin-top: 0;
 }
 
 .check-form-actions {

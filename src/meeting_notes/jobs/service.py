@@ -216,7 +216,7 @@ class JobService:
     def set_check(self, job_id, index, done, note="", remember=False):
         """확인 필요 절의 index번째 항목에 확인 표시를 하거나 지운다. 내용은 그대로라 확정은 풀지 않는다.
 
-        note는 확인한 내용이다. remember면 다음 회의에도 AI가 알도록 기억한다.
+        note는 확인한 내용이다. remember면 다음 회의록과 질문 답변에 참고하도록 등록한다.
         """
         job = self.get(job_id)
         self.require_done(job)
