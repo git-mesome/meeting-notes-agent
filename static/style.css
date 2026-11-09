@@ -121,6 +121,22 @@ svg.icon {
   backdrop-filter: blur(16px);
 }
 
+.user-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.user-link span {
+  color: var(--ink);
+  font-weight: 600;
+}
+
 .brand {
   display: inline-flex;
   align-items: center;

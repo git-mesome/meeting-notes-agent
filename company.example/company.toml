@@ -5,6 +5,15 @@
 # 접속을 허용할 Host. Tailscale로 핸드폰에서 접속하려면 "*.ts.net"이 있어야 한다.
 allowed_hosts = ["127.0.0.1", "localhost", "*.ts.net"]
 
+# 사내 SSO(OpenID Connect) 로그인. 앱 주소는 컴퓨터마다 다르므로 .env의 PUBLIC_URL로 정하고,
+# [auth]와 PUBLIC_URL이 모두 있을 때만 로그인이 켜진다. SSO에 등록할 redirect URI는 <PUBLIC_URL>/auth/callback이다.
+# [auth]
+# issuer = "https://sso.example.com/oidc"
+# client_id = "meeting-notes"
+# client_secret_env = "SSO_CLIENT_SECRET"   # secret은 .env에 둔다
+# role_claim = "role"
+# allowed_roles = []                         # 비우면 로그인한 사람 모두
+
 [spelling]
 # 전사문, 회의록, 질문 답변, 이슈 초안에서 항상 바꿀 표기. "에이아이" → "AI"는 기본으로 들어 있다.
 # "쿠버네티스" = "Kubernetes"

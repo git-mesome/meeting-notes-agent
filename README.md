@@ -68,6 +68,8 @@ http://127.0.0.1:8000 을 연다. 첫 녹음을 처리할 때 전사와 화자 �
 | `HF_TOKEN` | 예 | pyannote 화자 구분 모델 다운로드 |
 | `ANTHROPIC_API_KEY` | 예 | 회의록, 질문 답변, 이슈 초안 |
 | `COMPANY_DIR` | 아니오 | 회사 폴더 위치. 기본값은 프로젝트의 `company/` |
+| `PUBLIC_URL` | 로그인할 때 | 이 앱의 바깥 주소. 예: `http://meeting.example:8000`. 있으면 그 호스트를 접속 허용 주소에 더한다. |
+| SSO client secret | 로그인할 때 | `[auth]`의 `client_secret_env`가 가리키는 변수 |
 | 트래커 토큰 | 어댑터에 따라 | `company.toml`의 `[tracker]`에서 어댑터가 읽을 변수 이름을 정한다. 예: `JIRA_TOKEN` |
 
 ### 회사 폴더
@@ -89,6 +91,7 @@ company/
 | 키 | 기본값 | 설명 |
 |---|---|---|
 | `server.allowed_hosts` | `["127.0.0.1", "localhost", "*.ts.net"]` | 허용할 Host 헤더 |
+| `auth.*` | 없음 | 사내 SSO 로그인(아래 "로그인") |
 | `spelling` | `"에이아이" = "AI"` | 항상 바꿀 표기. 적은 규칙이 기본값에 더해진다. |
 | `tracker.module` | 없음 | 어댑터 파일 이름(`.py` 제외). `[tracker]`가 없으면 이슈 등록을 끈다. |
 | `tracker.*` | | 나머지 값은 어댑터의 `create(settings)`에 그대로 넘어간다. |
@@ -106,6 +109,24 @@ company/
 - "다음 회의에서도 이 목소리 알아보기"를 켜면 다음 회의부터 같은 사람에게 이름이 자동으로 붙는다.
 - 회의 내용을 질문하면 근거 시각과 함께 답한다. 첫 화면에서 지난 회의의 회의록과 전사문을 검색한다.
 - 처리 중인 작업은 중지할 수 있고, 삭제하면 녹음과 결과가 함께 지워진다.
+
+### 로그인
+
+여러 사람이 쓰는 서버에서는 사내 SSO(OpenID Connect)로 로그인한다. `company.toml`에 `[auth]`를 적고 그 서버의 `.env`에 `PUBLIC_URL`을 두면 켜진다. 둘 중 하나라도 없으면 로그인 없이 동작하므로, 같은 회사 폴더를 쓰는 개인 컴퓨터에서는 지금처럼 쓴다.
+
+```toml
+[auth]
+issuer = "https://sso.example.com/oidc"   # /.well-known/openid-configuration 이 있는 주소
+client_id = "meeting-notes"
+client_secret_env = "SSO_CLIENT_SECRET"
+role_claim = "role"
+allowed_roles = []                         # 비우면 로그인한 사람 모두
+```
+
+- SSO에 앱을 등록할 때 redirect URI는 `<PUBLIC_URL>/auth/callback`, 로그아웃 뒤 이동 주소는 `<PUBLIC_URL>/`이다.
+- authorization code + PKCE(S256)로 로그인하고, ID 토큰의 서명(RS256), 발급자, 대상, 만료, nonce를 확인한다.
+- 로그인 상태는 서버 키로 서명한 쿠키(HttpOnly, SameSite=Lax)에 둔다. 키는 `jobs/session-key`에 있다.
+- 올린 사람은 회의마다 `meta.json`의 `owner`에 남는다.
 
 ### 핸드폰에서 접속
 
@@ -135,6 +156,27 @@ tailscale serve --bg --https=443 http://127.0.0.1:8000   # 웹 푸시용 HTTPS
 ```bash
 uv run --env-file .env python meeting_notes.py recordings/회의.m4a --template weekly
 ```
+
+## 서버에 올리기
+
+Docker로 올린다. 회사 폴더, 결과, 모델 캐시는 서버의 폴더를 붙인다. 서버의 `.env` 예시:
+
+```
+HF_TOKEN=...
+ANTHROPIC_API_KEY=...
+PUBLIC_URL=http://meeting.example:8000
+CPU_LIMIT=16                        # 다른 서비스와 나눠 쓰도록 묶을 코어 수. 전사 스레드 수도 이 값을 쓴다.
+COMPANY_PATH=/srv/meeting-notes/company
+DATA_PATH=/srv/meeting-notes/jobs
+MODELS_PATH=/srv/meeting-notes/models
+BIND_ADDRESS=0.0.0.0               # 기본값 127.0.0.1(서버 자신에서만 접속). 로그인을 켠 뒤에 연다.
+```
+
+```bash
+docker compose up -d --build
+```
+
+결과와 모델 폴더는 컨테이너 사용자(uid 10001)가 쓸 수 있어야 한다. 첫 녹음을 처리할 때 모델 약 4GB를 내려받는다.
 
 ## 이슈 트래커 어댑터
 
@@ -168,6 +210,7 @@ token_env = "JIRA_TOKEN"   # 토큰은 .env에 둔다
 
 ```
 app.py              FastAPI 서버, 작업 큐, HTTP API
+auth.py             사내 SSO(OpenID Connect) 로그인
 meeting_notes.py    전사 파이프라인, Claude 호출, 명령줄 도구
 note_templates.py   회의 유형별 회의록 양식과 공통 문체 규칙
 company.py          회사 폴더 설정 읽기
@@ -195,10 +238,11 @@ tests/              pytest, 화면 개발용 가짜 서버
 | `jobs/<id>/issue_drafts.json` | 이슈 초안 |
 | `jobs/voices.json` | 등록한 목소리(권한 600) |
 | `jobs/push-key.pem`, `jobs/push-subscriptions.json` | 웹 푸시 키와 구독 정보 |
+| `jobs/session-key` | 로그인 쿠키 서명 키(권한 600) |
 
 ## HTTP API
 
-화면이 쓰는 API다. 인증은 없고, 쓰기 요청은 같은 사이트에서 보낸 것만 받는다.
+화면이 쓰는 API다. 로그인을 켜면 `/auth/*`와 화면 파일을 뺀 모든 요청에 로그인이 필요하고, 쓰기 요청은 같은 사이트에서 보낸 것만 받는다.
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
@@ -216,13 +260,14 @@ tests/              pytest, 화면 개발용 가짜 서버
 | `POST` | `/api/jobs/{id}/issues/drafts?refresh=` | 이슈 초안 |
 | `POST` | `/api/jobs/{id}/issues` | 이슈 등록 |
 | `GET` | `/api/search?q=` | 회의록, 전사문 검색 |
-| `GET` | `/api/templates`, `/api/tracker` | 양식 목록, 트래커 연동 상태 |
+| `GET` | `/api/templates`, `/api/tracker`, `/api/me` | 양식 목록, 트래커 연동 상태, 로그인한 사용자 |
+| `GET` | `/auth/login?next=`, `/auth/callback`, `/auth/logout` | SSO 로그인과 로그아웃 |
 | `GET`, `DELETE` | `/api/voices`, `/api/voices/{id}` | 등록한 목소리 목록, 삭제 |
 | `GET`, `POST` | `/api/push/key`, `/subscribe`, `/unsubscribe` | 웹 푸시 |
 
 ## 보안과 개인정보
 
-- 로그인이 없다. 서버는 `127.0.0.1`에만 열고 Tailscale로 중계한다. `0.0.0.0`으로 열거나 Tailscale Funnel로 공개하면 누구나 회의록을 보고 API 비용을 쓸 수 있다.
+- 로그인을 켜지 않으면 인증이 없다. 그때는 `127.0.0.1`에만 열고 Tailscale로 중계한다. 로그인 없이 `0.0.0.0`으로 열거나 Tailscale Funnel로 공개하면 누구나 회의록을 보고 API 비용을 쓸 수 있다.
 - 허용한 Host만 받고, 다른 사이트에서 보낸 쓰기 요청은 본문을 읽기 전에 막는다. CSP와 보안 헤더를 붙인다.
 - 녹음과 목소리 특징은 노트북 밖으로 보내지 않는다. 전사문, 회의록, 배경 지식, 열린 이슈의 설명 앞부분은 Claude API로 전송된다.
 - 목소리 특징은 생체 정보다. 본인이 동의한 사람만 등록하고, "등록한 목소리 관리"에서 지운다.
@@ -261,7 +306,8 @@ i7-1360P, `large-v3` int8, 8스레드 기준으로 음성 길이의 2.2~2.7배�
 
 ## 한계
 
-- 로그인이 없어 한 사람이 쓰는 용도다. 여러 사람이 쓰려면 계정 로그인이 필요하다.
+- 로그인한 사람은 모두 모든 회의록을 본다. 사람별로 나눠 보는 기능은 아직 없다.
+- 로그인을 켜면 아이폰 단축어로 올릴 수 없다. 단축어는 SSO 로그인을 할 수 없기 때문이다.
 - CPU로 처리해 녹음 길이보다 두 배 이상 오래 걸리고, 그동안 노트북이 켜져 있어야 한다.
 - 마이크 하나로 녹음하므로 짧게 끼어든 말은 다른 화자의 발언에 섞일 수 있다.
 - 목소리 자동 인식 기준값(코사인 유사도 0.75)은 회의 하나로 정한 잠정값이다. 다른 장소와 날짜의 회의에서는 알아보지 못하거나 틀릴 수 있다.

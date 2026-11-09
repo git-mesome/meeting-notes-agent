@@ -146,8 +146,17 @@ function confirmSheet({ title, body, action, danger = false }) {
 
 class ApiError extends Error {}
 
+function goToLogin() {
+  // 로그인이 풀렸으면 SSO 로그인으로 보내고, 돌아오면 보던 화면을 연다.
+  location.href = `/auth/login?next=${encodeURIComponent(`/${location.hash}`)}`;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, options);
+  if (response.status === 401) {
+    goToLogin();
+    throw new ApiError("로그인이 필요해요.");
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = typeof body.detail === "string" ? body.detail : "요청을 처리하지 못했어요. 다시 시도해 주세요.";
@@ -344,7 +353,9 @@ function uploadSection(onUploaded) {
     });
     request.addEventListener("load", () => {
       finish();
-      if (request.status === 201) {
+      if (request.status === 401) {
+        goToLogin();
+      } else if (request.status === 201) {
         toast("올렸어요. 다 되면 여기에 나타나요");
         onUploaded();
       } else {
@@ -552,7 +563,10 @@ function pushCard() {
 }
 
 async function renderList() {
-  const page = setScreen();
+  const me = await api("/api/me").catch(() => ({ login: false }));
+  const page = setScreen({
+    right: me.login ? el("a", { class: "user-link", href: "/auth/logout" }, el("span", { text: me.name }), "로그아웃") : null,
+  });
   const list = el("section", { "aria-label": "내 회의록" });
   const search = searchBox(list);
   const refresh = async () => {

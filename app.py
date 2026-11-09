@@ -4,6 +4,7 @@
 """
 
 import hashlib
+import html
 import json
 import logging
 import os
@@ -20,7 +21,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -28,6 +29,7 @@ from starlette.datastructures import UploadFile
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 import company
+from auth import FLOW_COOKIE, FLOW_SECONDS, SESSION_COOKIE, AuthError
 from note_templates import DEFAULT_TEMPLATE, TEMPLATES
 from push import PushCenter
 from trackers import TrackerError
@@ -52,6 +54,8 @@ RAW_SUFFIXES = {
 }
 # 로그인이 없으므로 서버는 127.0.0.1에만 열고 Tailscale로만 중계한다.
 READ_ONLY_METHODS = {"GET", "HEAD", "OPTIONS"}
+# 로그인하지 않아도 열리는 경로. 화면 파일과 로그인 과정만 연다.
+PUBLIC_PREFIXES = ("/auth/", "/static/")
 JOB_ID = re.compile(r"[0-9a-f]{32}")
 SPEAKER_LABEL = re.compile(r"SPEAKER_\d+")
 # 회의록 마크다운에 그대로 들어가므로 표와 강조, 시각 표시에 쓰는 기호를 막는다.
@@ -124,6 +128,22 @@ def copy_upload(source, target):
             if copied > MAX_UPLOAD_BYTES:
                 raise HTTPException(413, TOO_LARGE_MESSAGE)
             out.write(chunk)
+
+
+def is_public(path):
+    return path.startswith(PUBLIC_PREFIXES) or path == "/sw.js"
+
+
+def login_page(message, status):
+    """로그인 실패 안내. 인라인 스타일과 스크립트 없이 만들어 보안 정책(CSP)을 지킨다."""
+    body = (
+        '<!doctype html><html lang="ko"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1"><title>로그인</title>'
+        '<link rel="stylesheet" href="/static/style.css"></head><body><main class="page">'
+        f'<p class="page-message">{html.escape(message)}</p>'
+        '<p class="page-message"><a href="/auth/login">다시 로그인</a></p></main></body></html>'
+    )
+    return HTMLResponse(body, status_code=status)
 
 
 def default_process(audio, out_dir, on_stage, on_process):
@@ -468,10 +488,17 @@ class PushEndpoint(BaseModel):
 
 
 def create_app(
-    data_dir="jobs", process=default_process, answer=default_answer, push_send=None, tracker="company", draft=default_draft
+    data_dir="jobs",
+    process=default_process,
+    answer=default_answer,
+    push_send=None,
+    tracker="company",
+    draft=default_draft,
+    auth="company",
 ):
-    # 이슈 트래커는 회사 폴더의 어댑터로 만든다. 테스트에서는 객체를 직접 넘긴다.
+    # 이슈 트래커와 로그인은 회사 폴더의 설정으로 만든다. 테스트에서는 객체를 직접 넘긴다.
     tracker = company.current().tracker() if tracker == "company" else tracker
+    auth = company.current().auth(data_dir) if auth == "company" else auth
     store = JobStore(data_dir)
     voices = VoiceBook(data_dir)
     push = PushCenter(data_dir, send=push_send)
@@ -497,7 +524,15 @@ def create_app(
         if request.method not in READ_ONLY_METHODS and origin and urlsplit(origin).netloc != request.headers.get("host"):
             return JSONResponse({"detail": "다른 사이트에서 보낸 요청은 처리하지 않아요."}, status_code=403)
         path = request.url.path
-        response = await call_next(request)
+        user = auth.user(request.cookies.get(SESSION_COOKIE)) if auth else None
+        if auth and user is None and not is_public(path):
+            if path.startswith("/api/"):
+                response = JSONResponse({"detail": "로그인이 필요해요."}, status_code=401)
+            else:
+                response = RedirectResponse(f"/auth/login?next={quote(path)}", status_code=303)
+        else:
+            request.state.user = user
+            response = await call_next(request)
         response.headers.update(SECURITY_HEADERS)
         if path.startswith("/api/") or path == "/":
             response.headers["Cache-Control"] = "no-store"
@@ -743,7 +778,7 @@ def create_app(
     def list_jobs():
         return public_jobs(store)
 
-    def register_upload(job_id, name, suffix, incoming, template):
+    def register_upload(job_id, name, suffix, incoming, template, owner):
         """올라온 파일이 오디오인지 확인하고 처리 대기열에 넣는다."""
         audio = incoming.with_name(f"audio{suffix}")
         os.replace(incoming, audio)
@@ -758,6 +793,7 @@ def create_app(
             "error": None,
             "confirmed_at": None,
             "template": template,
+            "owner": owner,
         }
         store.write(job)
         worker.queue.put(job_id)
@@ -795,7 +831,8 @@ def create_app(
                         if copied > MAX_UPLOAD_BYTES:
                             raise HTTPException(413, TOO_LARGE_MESSAGE)
                         out.write(chunk)
-            return await run_in_threadpool(register_upload, job_id, name, suffix, incoming, template)
+            owner = {"sub": request.state.user["sub"], "name": request.state.user["name"]} if request.state.user else None
+            return await run_in_threadpool(register_upload, job_id, name, suffix, incoming, template, owner)
         except Exception:
             logger.warning("업로드를 거절했다: content_type=%s", content_type)
             shutil.rmtree(job_dir)
@@ -946,6 +983,56 @@ def create_app(
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": f"attachment; filename*=utf-8''{quote(f'회의록 {safe_title}.md')}"},
         )
+
+    @app.get("/api/me")
+    def me(request: Request):
+        user = request.state.user
+        return {"login": auth is not None, "name": user["name"] if user else None}
+
+    @app.get("/auth/login")
+    def login(next: str = "/"):
+        if auth is None:
+            return RedirectResponse("/", status_code=303)
+        try:
+            url, flow = auth.login(next)
+        except OSError as error:
+            logger.error("SSO 설정을 읽지 못했다", exc_info=error)
+            return login_page("SSO에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.", 502)
+        response = RedirectResponse(url, status_code=303)
+        response.set_cookie(
+            FLOW_COOKIE, flow, max_age=FLOW_SECONDS, path="/auth", httponly=True, samesite="lax", secure=auth.secure
+        )
+        return response
+
+    @app.get("/auth/callback")
+    def login_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+        if auth is None:
+            return RedirectResponse("/", status_code=303)
+        if error or not code:
+            return login_page("로그인을 마치지 못했어요.", 400)
+        try:
+            user, next_path = auth.finish(code, state, request.cookies.get(FLOW_COOKIE))
+        except AuthError as failure:
+            logger.warning("로그인 실패: %s", failure)
+            return login_page(str(failure), failure.status)
+        response = RedirectResponse(next_path, status_code=303)
+        response.set_cookie(
+            SESSION_COOKIE,
+            auth.session(user),
+            max_age=auth.session_seconds,
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=auth.secure,
+        )
+        response.delete_cookie(FLOW_COOKIE, path="/auth")
+        return response
+
+    @app.get("/auth/logout")
+    def logout():
+        response = RedirectResponse(auth.logout_url() if auth else "/", status_code=303)
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
 
     @app.get("/sw.js")
     def service_worker():
