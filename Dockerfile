@@ -1,7 +1,8 @@
 FROM python:3.12-slim-bookworm AS base
 
+# media-types는 /etc/mime.types다. 없으면 m4a 녹음을 application/octet-stream으로 보내 Safari가 재생하지 못한다.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg media-types \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /bin/uv
 
