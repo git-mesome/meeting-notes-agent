@@ -33,6 +33,10 @@
   font-size: 0.9375rem;
 }
 
+.waiting .note:empty {
+  display: none;
+}
+
 .waiting .file {
   margin: 0.4rem 0 0;
   color: var(--muted);

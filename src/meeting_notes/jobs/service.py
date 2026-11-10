@@ -6,13 +6,21 @@ import os
 import re
 import shutil
 import uuid
+from pathlib import Path
 
-from meeting_notes.errors import AppError, Conflict, NotFound, Upstream
+from meeting_notes.errors import AppError, Conflict, NotFound, TooLarge, Upstream
 from meeting_notes.jobs.search import plain_text, search_pattern, snippet
 from meeting_notes.jobs.share import render_share_html
 from meeting_notes.jobs.store import ACTIVE_STATUSES, now
 from meeting_notes.jobs.views import public_jobs
 from meeting_notes.pipeline.audio import find_audio, probe_duration
+from meeting_notes.pipeline.documents import (
+    DOCUMENT_TYPES,
+    DOCUMENTS_DIR,
+    MAX_DOCUMENTS_BYTES,
+    document_problem,
+    find_documents,
+)
 from meeting_notes.pipeline.notes import notes_title
 from meeting_notes.pipeline.spelling import fix_spelling
 from meeting_notes.pipeline.templates import DEFAULT_TEMPLATE, TEMPLATES
@@ -28,6 +36,8 @@ CHECK_ITEM = re.compile(r"^\s*[-*]\s+(?:\[[ xX]\]\s+)?")
 # 확인한 내용은 항목 뒤에 "— 확인: 내용"으로 붙인다.
 CHECK_NOTE = " — 확인: "
 TIME_REFS = re.compile(r"\s*\[\d{1,2}:\d{2}(?::\d{2})?\]")
+# 자료는 회의록을 쓰기 직전에 읽는다. 그 뒤에 붙이거나 지운 자료는 다시 써야 반영된다.
+DOCUMENTS_READ_STATUSES = ("writing", "done")
 
 
 def require_template(template):
@@ -81,9 +91,13 @@ class JobService:
     def list(self):
         return public_jobs(self.store)
 
+    def documents(self, job_id):
+        return [{"name": path.name, "size": path.stat().st_size} for path in find_documents(self.store.path(job_id))]
+
     def detail(self, job_id):
         self.get(job_id)
         view = next(view for view in public_jobs(self.store) if view["id"] == job_id)
+        view["documents"] = self.documents(job_id)
         if view["status"] == "done":
             # 목록을 읽기 전에 읽은 상태를 쓰면, 그 사이에 끝난 작업의 화자 이름이 빠진다.
             job = self.get(job_id)
@@ -95,6 +109,7 @@ class JobService:
             view["template"] = job.get("template", DEFAULT_TEMPLATE)
             view["questions"] = self.questions(job_id)
             view["issues"] = self.issue_links(job.get("issues") or [])
+            view["documents_pending"] = bool(job.get("documents_pending"))
         return view
 
     def audio_path(self, job_id):
@@ -187,11 +202,63 @@ class JobService:
     def discard(self, job_id):
         shutil.rmtree(self.store.path(job_id), ignore_errors=True)
 
+    # 회의 자료
+
+    def document_path(self, job_id, name):
+        self.get(job_id)
+        found = next((path for path in find_documents(self.store.path(job_id)) if path.name == name), None)
+        if found is None:
+            raise NotFound("자료를 찾을 수 없어요.")
+        return found
+
+    def document_upload_path(self, job_id):
+        """올라오는 자료를 잠시 받아 둘 파일. 확장자가 달라 자료 목록에는 보이지 않는다."""
+        self.get(job_id)
+        folder = self.store.path(job_id) / DOCUMENTS_DIR
+        folder.mkdir(exist_ok=True)
+        return folder / f".upload-{uuid.uuid4().hex}.tmp"
+
+    def add_document(self, job_id, name, incoming):
+        """받아 둔 자료에 원래 이름을 붙인다. 같은 이름이 있으면 뒤에 번호를 붙인다."""
+        try:
+            original = Path(name)
+            suffix = original.suffix.lower()
+            if suffix not in DOCUMENT_TYPES:
+                raise AppError("PDF, 이미지(png, jpg, webp, gif), 텍스트(txt, md), 웹 페이지(html) 파일만 붙일 수 있어요.")
+            if problem := document_problem(incoming, suffix):
+                raise AppError(problem)
+            used = sum(path.stat().st_size for path in find_documents(self.store.path(job_id)))
+            if used + incoming.stat().st_size > MAX_DOCUMENTS_BYTES:
+                raise TooLarge(f"자료는 한 회의에 모두 합쳐 {MAX_DOCUMENTS_BYTES // 1024**2}MB까지 붙일 수 있어요.")
+            stem = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", original.stem).strip()[:80] or "자료"
+            target = incoming.with_name(f"{stem}{suffix}")
+            number = 2
+            while target.exists():
+                target = incoming.with_name(f"{stem} ({number}){suffix}")
+                number += 1
+            os.replace(incoming, target)
+        finally:
+            incoming.unlink(missing_ok=True)
+        # 올리는 동안 회의록 쓰기가 시작됐을 수 있어 상태를 다시 읽는다.
+        self.mark_documents_changed(self.get(job_id))
+        return self.detail(job_id)
+
+    def delete_document(self, job_id, name):
+        path = self.document_path(job_id, name)
+        path.unlink()
+        self.mark_documents_changed(self.get(job_id))
+        return self.detail(job_id)
+
+    def mark_documents_changed(self, job):
+        """이미 회의록을 쓰기 시작했으면 다시 써야 반영된다고 표시한다."""
+        if job["status"] in DOCUMENTS_READ_STATUSES:
+            self.store.update(job["id"], documents_pending=True)
+
     def requeue_interrupted(self):
         """처리 중에 서버가 꺼졌던 작업을 오래된 순서대로 다시 넣는다."""
         interrupted = [job for job in self.store.all() if job["status"] in ACTIVE_STATUSES]
         for job in sorted(interrupted, key=lambda job: job["created_at"]):
-            self.store.update(job["id"], status="queued")
+            self.store.update(job["id"], status="queued", documents_pending=False)
             self.worker.queue.put(job["id"])
 
     # 고치기
@@ -300,7 +367,9 @@ class JobService:
         job_dir = self.store.path(job_id)
         shutil.copyfile(job_dir / "notes.md", job_dir / "notes.previous.md")
         (job_dir / "notes.draft.md").unlink(missing_ok=True)
-        self.store.update(job_id, status="queued", template=template, confirmed_at=None, error=None)
+        self.store.update(
+            job_id, status="queued", template=template, confirmed_at=None, error=None, documents_pending=False
+        )
         self.worker.queue.put(job_id)
         return self.detail(job_id)
 
@@ -310,7 +379,7 @@ class JobService:
             raise Conflict("실패하거나 멈춘 작업만 다시 시작할 수 있어요.")
         if self.worker.is_running(job_id):
             raise Conflict(STILL_STOPPING_MESSAGE)
-        self.store.update(job_id, status="queued", error=None)
+        self.store.update(job_id, status="queued", error=None, documents_pending=False)
         self.worker.queue.put(job_id)
         return self.detail(job_id)
 

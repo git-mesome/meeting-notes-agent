@@ -100,8 +100,18 @@ TEMPLATES = {
 }
 
 
-def system_prompt(template=DEFAULT_TEMPLATE, max_chars=None):
+# 회의 전에 만든 자료는 회의에서 바뀌었을 수 있다. 자료 내용이 결정처럼 들어가지 않게 발언을 기준으로 삼는다.
+DOCUMENT_RULES = """회의 자료 규칙:
+- 전사문 앞의 문서와 이미지는 회의에서 화면에 띄우거나 함께 본 자료다.
+- "이거", "여기 3번", "이 표"처럼 발언이 가리키는 대상을 밝히고, 이름, 수치, 제품명, 용어의 표기를 바로잡는 데 쓴다.
+- 회의에서 말하지 않은 자료 내용은 회의록에 옮기지 않는다. 자료를 그대로 따르기로 한 발언이 있을 때만 그 내용을 적는다.
+- 자료와 발언이 다르면 발언을 따른다. 결정, 담당, 기한, 숫자가 달라지는 차이는 확인 필요에 적는다."""
+
+
+def system_prompt(template=DEFAULT_TEMPLATE, max_chars=None, documents=False):
     prompt = f"{COMMON_RULES}\n{TEMPLATES[template]['format']}"
+    if documents:
+        prompt += f"\n\n{DOCUMENT_RULES}"
     if max_chars:
         prompt += f"\n\n회의록 전체 분량은 공백을 포함해 {max_chars}자 이내로 쓴다. 넘칠 것 같으면 결정의 근거부터 줄인다."
     return prompt

@@ -3,6 +3,7 @@
 import re
 
 from meeting_notes import llm
+from meeting_notes.pipeline.documents import document_blocks
 from meeting_notes.pipeline.knowledge import load_knowledge
 from meeting_notes.pipeline.spelling import fix_spelling
 from meeting_notes.pipeline.templates import DEFAULT_TEMPLATE, system_prompt
@@ -12,15 +13,18 @@ NOTES_LENGTH_RATIO = 0.2
 MIN_NOTES_CHARS = 800
 
 
-def write_notes(transcript, glossary, template=DEFAULT_TEMPLATE, facts=()):
+def write_notes(transcript, glossary, template=DEFAULT_TEMPLATE, facts=(), documents=()):
+    """documents는 회의에서 함께 본 자료 파일(pipeline/documents.py)이다."""
     user = f"<transcript>\n{transcript}\n</transcript>"
     if glossary:
         user = f"<glossary>\n{chr(10).join(glossary)}\n</glossary>\n\n{user}"
     knowledge = load_knowledge(transcript, facts=facts)
     if knowledge:
         user = f"<company_knowledge>\n{knowledge}\n</company_knowledge>\n\n{user}"
-    system = system_prompt(template, max(MIN_NOTES_CHARS, int(len(transcript) * NOTES_LENGTH_RATIO)))
-    notes, usage = llm.stream("회의록 생성", system, user, "high", 64000)
+    max_chars = max(MIN_NOTES_CHARS, int(len(transcript) * NOTES_LENGTH_RATIO))
+    system = system_prompt(template, max_chars, documents=bool(documents))
+    content = [*document_blocks(documents), {"type": "text", "text": user}] if documents else user
+    notes, usage = llm.stream("회의록 생성", system, content, "high", 64000)
     return fix_spelling(notes), usage
 
 

@@ -2,6 +2,7 @@
 
 import { api, jsonOptions } from "./api.js";
 import { renderAsk } from "./ask.js";
+import { documentsNotice, openDocumentsSheet } from "./documents.js";
 import { badge, clock, displayName, metaText } from "./format.js";
 import { issueKey, openIssueSheet, trackerStatus } from "./issues.js";
 import { openMoreMenu } from "./menus.js";
@@ -95,7 +96,15 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
     back: true,
     right: el(
       "button",
-      { class: "icon-button", type: "button", "aria-label": "더보기", onclick: () => openMoreMenu(job) },
+      {
+        class: "icon-button",
+        type: "button",
+        "aria-label": "더보기",
+        onclick: () =>
+          openMoreMenu(job, {
+            onDocuments: () => openDocumentsSheet(job, (updated) => renderDetail(updated, { restore: currentView() })),
+          }),
+      },
       icon("more"),
     ),
   });
@@ -375,8 +384,12 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
       { class: "doc-head" },
       badge(job, justConfirmed),
       el("h1", { text: friendly(displayName(job)) }),
-      el("span", { class: "meta", text: `${metaText(job)}${job.edited ? ", 수정함" : ""}` }),
+      el("span", {
+        class: "meta",
+        text: `${metaText(job)}${job.edited ? ", 수정함" : ""}${job.documents.length ? `, 자료 ${job.documents.length}개` : ""}`,
+      }),
     ),
+    documentsNotice(job),
     ribbon.node,
     mobileTabs,
     el("div", { class: "panes" }, notesPane, sidePane),

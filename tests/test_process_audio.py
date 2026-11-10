@@ -26,15 +26,16 @@ SEGMENTS = {
 
 @pytest.fixture
 def pipeline(monkeypatch):
-    calls = SimpleNamespace(transcribe=0, transcript=None, glossary=None)
+    calls = SimpleNamespace(transcribe=0, transcript=None, glossary=None, documents=None)
 
     def fake_transcribe(audio, out_dir, glossary, _on_process):
         calls.transcribe += 1
         calls.glossary = glossary
         (out_dir / f"{audio.stem}.json").write_text(json.dumps(SEGMENTS, ensure_ascii=False), encoding="utf-8")
 
-    def fake_write_notes(transcript, _glossary, _template, _facts=()):
+    def fake_write_notes(transcript, _glossary, _template, _facts=(), documents=()):
         calls.transcript = transcript
+        calls.documents = documents
         return "# 회의록: 예시", SimpleNamespace(input_tokens=11, output_tokens=22)
 
     monkeypatch.setattr(process, "transcribe", fake_transcribe)

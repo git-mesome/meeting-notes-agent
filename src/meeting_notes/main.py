@@ -32,12 +32,16 @@ from meeting_notes.web.routers import speakers as speaker_routes
 
 
 def default_process(audio, out_dir, on_stage, on_process):
+    from meeting_notes.pipeline.documents import find_documents
     from meeting_notes.pipeline.process import process_audio
 
     template = json.loads((out_dir / "meta.json").read_text(encoding="utf-8")).get("template", DEFAULT_TEMPLATE)
     # 작업 폴더는 결과 폴더 바로 아래에 있다. 사용자가 확인해 준 사실도 결과 폴더에 있다.
     facts = MemoryBook(out_dir.parent).facts()
-    return process_audio(audio, out_dir, settings.current().glossary, on_stage, on_process, template, facts)
+    glossary = settings.current().glossary
+    return process_audio(
+        audio, out_dir, glossary, on_stage, on_process, template, facts, load_documents=lambda: find_documents(out_dir)
+    )
 
 
 def default_answer(transcript, notes_text, question, facts=()):

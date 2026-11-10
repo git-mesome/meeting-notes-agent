@@ -382,6 +382,53 @@
   flex: 1;
 }
 
+/* 회의 자료 */
+.documents-notice {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  padding: 1.25rem;
+}
+
+.documents-notice p {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.document-list {
+  margin-top: 1rem;
+  border-radius: 16px;
+  background: var(--soft);
+}
+
+.document-text {
+  min-width: 0;
+}
+
+.document-text .note-title {
+  font-size: 0.9375rem;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.document-empty {
+  padding: 1rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.document-picker {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+label.button[aria-disabled="true"] {
+  opacity: 0.5;
+}
+
 /* 재생 막대 */
 .dock {
   position: fixed;

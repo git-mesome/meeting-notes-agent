@@ -6,6 +6,7 @@
     spelling.py    회사 표기 규칙
     knowledge.py   회사 배경 지식과 용어
     templates.py   회의 유형별 회의록 양식
+    documents.py   회의에서 함께 본 자료
     notes.py       Claude로 회의록 쓰기
     process.py     위 단계를 이어서 녹음 하나를 처리한다
 """

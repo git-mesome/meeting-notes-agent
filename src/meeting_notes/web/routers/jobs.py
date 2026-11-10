@@ -1,4 +1,4 @@
-"""회의 올리기와 처리 상태."""
+"""회의 올리기와 처리 상태, 회의 자료 붙이기."""
 
 import logging
 from pathlib import Path
@@ -11,6 +11,7 @@ from starlette.datastructures import UploadFile
 from meeting_notes.errors import AppError, TooLarge
 from meeting_notes.jobs.service import require_template
 from meeting_notes.pipeline.audio import ALLOWED_SUFFIXES
+from meeting_notes.pipeline.documents import MAX_DOCUMENTS_BYTES
 from meeting_notes.pipeline.templates import DEFAULT_TEMPLATE, TEMPLATES
 from meeting_notes.web.deps import Jobs, User
 
@@ -32,13 +33,14 @@ RAW_SUFFIXES = {
 }
 
 
-def copy_upload(source, target):
+def copy_upload(source, target, limit=None, message=TOO_LARGE_MESSAGE):
+    limit = limit or MAX_UPLOAD_BYTES
     copied = 0
     with open(target, "wb") as out:
         while chunk := source.read(1024 * 1024):
             copied += len(chunk)
-            if copied > MAX_UPLOAD_BYTES:
-                raise TooLarge(TOO_LARGE_MESSAGE)
+            if copied > limit:
+                raise TooLarge(message)
             out.write(chunk)
 
 
@@ -117,3 +119,35 @@ def delete_job(job_id: str, jobs: Jobs):
 @router.get("/jobs/{job_id}/audio")
 def audio(job_id: str, jobs: Jobs):
     return FileResponse(jobs.audio_path(job_id))
+
+
+# 회의 자료
+
+
+@router.post("/jobs/{job_id}/documents")
+async def add_document(job_id: str, request: Request, jobs: Jobs):
+    """회의에서 함께 본 자료를 하나 붙인다. 회의록을 쓰기 전이면 회의록을 쓸 때 함께 본다."""
+    incoming = jobs.document_upload_path(job_id)
+    try:
+        async with request.form() as form:
+            upload = next((value for value in form.values() if isinstance(value, UploadFile)), None)
+            if upload is None:
+                raise AppError("파일이 들어 있지 않아요. 자료 파일을 올려 주세요.")
+            name = Path(upload.filename or "자료").name[:200]
+            message = f"자료는 한 회의에 모두 합쳐 {MAX_DOCUMENTS_BYTES // 1024**2}MB까지 붙일 수 있어요."
+            await run_in_threadpool(copy_upload, upload.file, incoming, MAX_DOCUMENTS_BYTES, message)
+        return await run_in_threadpool(jobs.add_document, job_id, name, incoming)
+    finally:
+        incoming.unlink(missing_ok=True)
+
+
+@router.get("/jobs/{job_id}/documents/{name}")
+def read_document(job_id: str, name: str, jobs: Jobs):
+    """내려받기로만 준다. 올라온 HTML이 이 사이트 안에서 열리면 그 안의 스크립트가 실행된다."""
+    path = jobs.document_path(job_id, name)
+    return FileResponse(path, filename=path.name, media_type="application/octet-stream")
+
+
+@router.delete("/jobs/{job_id}/documents/{name}")
+def delete_document(job_id: str, name: str, jobs: Jobs):
+    return jobs.delete_document(job_id, name)

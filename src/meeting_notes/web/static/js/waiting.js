@@ -1,6 +1,7 @@
 /* 처리 중인 회의 화면. */
 
 import { api } from "./api.js";
+import { documentsText, openDocumentsSheet } from "./documents.js";
 import { detailText, displayName, headline, isActive, isWorking, progress, spanOfTime } from "./format.js";
 import { route } from "./router.js";
 import { deleteJob, setScreen } from "./screen.js";
@@ -34,7 +35,18 @@ export function renderWaiting(job) {
   const bar = el("div", { class: "bottom-bar-inner" });
 
   if (isActive(job)) {
-    content.append(el("p", { class: "note", text: "이 화면을 닫아도 괜찮아요. 끝날 때까지 노트북만 켜 두세요." }));
+    const documentsLine = el("p", { class: "note", text: documentsText(job) });
+    content.append(
+      documentsLine,
+      el("p", { class: "note", text: "이 화면을 닫아도 괜찮아요. 끝날 때까지 노트북만 켜 두세요." }),
+    );
+    const attach = button("회의 자료 붙이기", {
+      iconName: "upload",
+      onclick: () => openDocumentsSheet(job, (updated) => {
+        job.documents = updated.documents;
+        documentsLine.textContent = documentsText(updated);
+      }),
+    });
     const stop = button("처리 멈추기", {
       onclick: async () => {
         const agreed = await confirmSheet({
@@ -54,7 +66,7 @@ export function renderWaiting(job) {
         }
       },
     });
-    bar.append(stop);
+    bar.append(stop, attach);
 
     const refresh = async () => {
       let latest;
@@ -70,6 +82,7 @@ export function renderWaiting(job) {
       }
       title.textContent = headline(latest);
       state.textContent = detailText(latest);
+      documentsLine.textContent = documentsText(latest);
       meterBox.replaceChildren(...(isWorking(latest) ? [meter(progress(latest))] : []));
       state.pollTimer = setTimeout(refresh, POLL_MS);
     };

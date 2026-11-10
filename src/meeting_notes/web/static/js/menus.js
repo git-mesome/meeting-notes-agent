@@ -55,7 +55,7 @@ export async function openTemplateMenu(job) {
   ]);
 }
 
-export function openMoreMenu(job) {
+export function openMoreMenu(job, { onDocuments }) {
   openSheet((close) => [
     el(
       "div",
@@ -72,6 +72,19 @@ export function openMoreMenu(job) {
         },
         icon("rewrite"),
         "다른 양식으로 다시 쓰기",
+      ),
+      el(
+        "button",
+        {
+          class: "sheet-item",
+          type: "button",
+          onclick: () => {
+            close();
+            onDocuments();
+          },
+        },
+        icon("upload"),
+        "회의 자료 붙이기",
       ),
       el(
         "button",

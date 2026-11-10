@@ -88,7 +88,7 @@ def test_answers_and_next_notes_get_remembered_facts(tmp_path, monkeypatch):
     job_dir.mkdir()
     (job_dir / "meta.json").write_text('{"template": "general"}', encoding="utf-8")
     seen = {}
-    monkeypatch.setattr(process, "process_audio", lambda *args: seen.update(facts=args[-1]) or {})
+    monkeypatch.setattr(process, "process_audio", lambda *args, **kwargs: seen.update(facts=args[-1]) or {})
     main.default_process(job_dir / "audio.m4a", job_dir, lambda stage: None, lambda proc: None)
     assert seen["facts"] == ['"홍길똥 부장님"의 실제 이름 → 홍길동 부장님이 맞음']
     text = knowledge.load_knowledge("전사문", tmp_path / "없음", facts=seen["facts"])
