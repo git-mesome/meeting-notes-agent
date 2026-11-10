@@ -8,6 +8,7 @@ import { issueKey, openIssueSheet, trackerStatus } from "./issues.js";
 import { openMoreMenu } from "./menus.js";
 import { attachSectionEditors } from "./edit.js";
 import { renderNotes } from "./notes.js";
+import { openPeopleSheet, peopleLine } from "./people.js";
 import { setScreen } from "./screen.js";
 import { reducedMotion, state } from "./state.js";
 import { PAUSE_ICON, PLAY_ICON, SVG_NS, button, el, icon, openSheet, toast } from "./ui.js";
@@ -19,7 +20,7 @@ export function renderRibbon(turns, duration, speakers, seek, onName) {
     "section",
     { class: "ribbon card" },
     el("h2", { text: "누가 얼마나 말했나요" }),
-    el("p", { class: "ribbon-hint", text: "이름을 누르면 들어 보고 바꿀 수 있어요" }),
+    onName ? el("p", { class: "ribbon-hint", text: "이름을 누르면 들어 보고 바꿀 수 있어요" }) : null,
   );
   const cursors = [];
   for (const speaker of speakers.filter((item) => item.known)) {
@@ -44,17 +45,25 @@ export function renderRibbon(turns, duration, speakers, seek, onName) {
       el(
         "div",
         { class: `ribbon-row speaker-${speaker.color}` },
-        el(
-          "button",
-          {
-            class: "ribbon-name",
-            type: "button",
-            "aria-label": `${speaker.name} 이름 바꾸기`,
-            onclick: () => onName(speaker),
-          },
-          el("span", { class: "ribbon-name-text", text: speaker.name }),
-          speaker.auto ? el("span", { class: "auto-tag", text: "자동" }) : icon("pencil"),
-        ),
+        // onName이 없으면(고칠 수 없는 사람) 이름만 보인다.
+        onName
+          ? el(
+              "button",
+              {
+                class: "ribbon-name",
+                type: "button",
+                "aria-label": `${speaker.name} 이름 바꾸기`,
+                onclick: () => onName(speaker),
+              },
+              el("span", { class: "ribbon-name-text", text: speaker.name }),
+              speaker.auto ? el("span", { class: "auto-tag", text: "자동" }) : icon("pencil"),
+            )
+          : el(
+              "span",
+              { class: "ribbon-name" },
+              el("span", { class: "ribbon-name-text", text: speaker.name }),
+              speaker.auto ? el("span", { class: "auto-tag", text: "자동" }) : null,
+            ),
         el("span", { class: "ribbon-share", text: `${speaker.share}%` }),
         track,
       ),
@@ -91,6 +100,9 @@ export function currentTurnIndex(turns, time) {
 }
 
 export function renderDetail(job, { justConfirmed = false, restore = null, startAt = null, openIssues = false } = {}) {
+  // 고칠 수 없는 사람에게는 수정 버튼을 숨긴다. 서버도 같은 규칙으로 막는다(jobs/access.py).
+  const can = job.access;
+  const rerender = (updated) => renderDetail(updated, { restore: currentView() });
   const page = setScreen({
     wide: true,
     back: true,
@@ -102,7 +114,8 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
         "aria-label": "더보기",
         onclick: () =>
           openMoreMenu(job, {
-            onDocuments: () => openDocumentsSheet(job, (updated) => renderDetail(updated, { restore: currentView() })),
+            onDocuments: () => openDocumentsSheet(job, rerender),
+            onPeople: () => openPeopleSheet(job, rerender),
           }),
       },
       icon("more"),
@@ -142,7 +155,7 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
           "aria-label": `${clock(turn.start)}부터 듣기`,
           onclick: () => seek(turn.start),
         }),
-        speaker.known
+        speaker.known && can.edit
           ? el("button", {
               class: "speaker-name",
               type: "button",
@@ -276,7 +289,7 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
     });
   }
 
-  const ribbon = renderRibbon(turns, duration, job.speakers, seek, openSpeakerSheet);
+  const ribbon = renderRibbon(turns, duration, job.speakers, seek, can.edit ? openSpeakerSheet : null);
 
   audio.addEventListener("timeupdate", () => {
     timeLabel.textContent = `${clock(audio.currentTime)} / ${clock(duration)}`;
@@ -298,8 +311,8 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
     const updated = await api(`/api/jobs/${job.id}/checks/${index}`, jsonOptions("PUT", body));
     job.notes = updated.notes;
   };
-  const article = renderNotes(friendly(job.notes), seek, { onCheck });
-  attachSectionEditors(article, job, (updated) => renderDetail(updated, { restore: currentView() }));
+  const article = renderNotes(friendly(job.notes), seek, { onCheck: can.edit ? onCheck : null });
+  if (can.edit) attachSectionEditors(article, job, rerender);
   const notesPane = el("div", {}, article);
   const transcriptCard = el("div", { class: "card" }, transcript);
   const askCard = renderAsk(job, seek, friendly);
@@ -341,7 +354,7 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
   setView(activeView);
 
   trackerStatus().then((status) => {
-    if (!status.enabled) return;
+    if (!status.enabled || !can.edit) return;
     const section = [...notesPane.querySelectorAll("section")].find((item) =>
       item.querySelector("h2")?.textContent.startsWith("액션 아이템"),
     );
@@ -363,6 +376,8 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
 
   const confirmButton = job.confirmed_at
     ? button("확정됨", { variant: "done", disabled: true, iconName: "check" })
+    : !can.edit
+    ? null
     : button("확정하기", {
         variant: "primary",
         onclick: async () => {
@@ -388,8 +403,10 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
         class: "meta",
         text: `${metaText(job)}${job.edited ? ", 수정함" : ""}${job.documents.length ? `, 자료 ${job.documents.length}개` : ""}`,
       }),
+      peopleLine(job),
     ),
-    documentsNotice(job),
+    // DOM의 append는 null을 "null" 글자로 넣으므로 알림이 없으면 빼고 넣는다.
+    ...[can.edit ? documentsNotice(job) : null].filter(Boolean),
     ribbon.node,
     mobileTabs,
     el("div", { class: "panes" }, notesPane, sidePane),

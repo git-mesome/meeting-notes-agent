@@ -14,6 +14,7 @@ def public_job(job, ahead=0):
         key: job.get(key)
         for key in ("id", "name", "title", "status", "created_at", "duration_seconds", "error", "confirmed_at")
     }
+    view["private"] = bool(job.get("private"))
     view["ahead"] = ahead
     view["estimated_seconds"] = job["duration_seconds"] * SECONDS_PER_AUDIO_SECOND
     view["elapsed_seconds"] = None
@@ -23,8 +24,9 @@ def public_job(job, ahead=0):
     return view
 
 
-def public_jobs(store):
+def public_jobs(store, visible=lambda job: True):
+    """visible이 거르는 회의는 빼되, 대기 순서는 보이지 않는 회의까지 세어 매긴다."""
     jobs = store.all()
     active = sorted((j for j in jobs if j["status"] in ACTIVE_STATUSES), key=lambda j: j["created_at"])
     position = {job["id"]: index for index, job in enumerate(active)}
-    return [public_job(job, position.get(job["id"], 0)) for job in jobs]
+    return [public_job(job, position.get(job["id"], 0)) for job in jobs if visible(job)]

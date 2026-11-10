@@ -7,6 +7,7 @@ company.toml:
     client_secret_env = "SSO_CLIENT_SECRET"   # .env에 둔 client secret의 변수 이름. 비우면 공개 클라이언트로 PKCE만 쓴다.
     role_claim = "role"                       # 역할이 들어 있는 클레임 이름
     allowed_roles = []                        # 비우면 로그인한 사람 모두 들어온다
+    admin_subs = []                           # 모든 회의를 고치고 지우는 사람의 sub(jobs/access.py)
     session_hours = 168
 
 앱 주소는 컴퓨터마다 다르므로 .env의 PUBLIC_URL(예: http://meeting.example:8000)로 정한다. SSO에 등록할
@@ -56,6 +57,8 @@ class OIDC:
         self.base_url = settings["base_url"].rstrip("/")
         self.role_claim = settings.get("role_claim", "role")
         self.allowed_roles = settings.get("allowed_roles") or []
+        # 모든 회의를 고치고 지우는 사람(jobs/access.py). SSO의 sub로 적는다.
+        self.admins = frozenset(str(sub) for sub in settings.get("admin_subs") or [])
         self.session_seconds = int(settings.get("session_hours", 168)) * 3600
         self.secure = self.base_url.startswith("https://")
         self.signer = Signer(load_key(key_dir))

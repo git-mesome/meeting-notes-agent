@@ -8,7 +8,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
-from meeting_notes.auth import OIDC
+from meeting_notes.auth import OIDC, UserBook
 from meeting_notes.issues.service import IssueService
 from meeting_notes.jobs.service import JobService
 from meeting_notes.memory import MemoryBook
@@ -24,6 +24,7 @@ class Services:
     memory: MemoryBook
     push: PushCenter
     auth: OIDC | None
+    users: UserBook
 
 
 def services(request: Request) -> Services:
@@ -31,7 +32,9 @@ def services(request: Request) -> Services:
 
 
 def job_service(request: Request) -> JobService:
-    return services(request).jobs
+    """요청한 사람의 권한으로 회의를 읽고 고친다(jobs/access.py)."""
+    found = services(request)
+    return found.jobs.as_viewer(current_user(request), found.auth.admins if found.auth else ())
 
 
 def issue_service(request: Request) -> IssueService:
@@ -50,6 +53,10 @@ def push_center(request: Request) -> PushCenter:
     return services(request).push
 
 
+def user_book(request: Request) -> UserBook:
+    return services(request).users
+
+
 def login(request: Request) -> OIDC | None:
     return services(request).auth
 
@@ -64,5 +71,6 @@ Issues = Annotated[IssueService, Depends(issue_service)]
 Voices = Annotated[VoiceBook, Depends(voice_book)]
 Memory = Annotated[MemoryBook, Depends(memory_book)]
 Push = Annotated[PushCenter, Depends(push_center)]
+Users = Annotated[UserBook, Depends(user_book)]
 Auth = Annotated[OIDC | None, Depends(login)]
 User = Annotated[dict | None, Depends(current_user)]

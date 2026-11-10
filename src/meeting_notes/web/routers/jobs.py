@@ -1,4 +1,4 @@
-"""회의 올리기와 처리 상태, 회의 자료 붙이기."""
+"""회의 올리기와 처리 상태, 참석자와 공개 범위, 회의 자료 붙이기."""
 
 import logging
 from pathlib import Path
@@ -13,7 +13,8 @@ from meeting_notes.jobs.service import require_template
 from meeting_notes.pipeline.audio import ALLOWED_SUFFIXES
 from meeting_notes.pipeline.documents import MAX_DOCUMENTS_BYTES
 from meeting_notes.pipeline.templates import DEFAULT_TEMPLATE, TEMPLATES
-from meeting_notes.web.deps import Jobs, User
+from meeting_notes.web.deps import Jobs, User, Users
+from meeting_notes.web.schemas import AccessUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,12 @@ def cancel(job_id: str, jobs: Jobs):
 def delete_job(job_id: str, jobs: Jobs):
     jobs.delete(job_id)
     return {"ok": True}
+
+
+@router.put("/jobs/{job_id}/access")
+def set_access(job_id: str, body: AccessUpdate, jobs: Jobs, users: Users):
+    """참석자는 회의록을 고칠 수 있고, "참석자만 보기"를 켜면 다른 사람에게는 보이지 않는다(jobs/access.py)."""
+    return jobs.set_access(job_id, body.attendees, body.private, users)
 
 
 @router.get("/jobs/{job_id}/audio")

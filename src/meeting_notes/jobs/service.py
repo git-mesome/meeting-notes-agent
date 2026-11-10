@@ -1,5 +1,6 @@
 """회의 조회와 수정. 라우터는 요청을 받아 이 서비스를 부르기만 한다."""
 
+import copy
 import json
 import logging
 import os
@@ -9,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from meeting_notes.errors import AppError, Conflict, NotFound, TooLarge, Upstream
+from meeting_notes.jobs.access import EDIT, MANAGE, VIEW, access, require
 from meeting_notes.jobs.search import plain_text, search_pattern, snippet
 from meeting_notes.jobs.share import render_share_html
 from meeting_notes.jobs.store import ACTIVE_STATUSES, now
@@ -55,13 +57,27 @@ class JobService:
         self.issue_links = issue_links or (lambda items: items)
         # 사용자가 확인해 준 사실(memory.MemoryBook). 질문 답변과 다음 회의록에 참고한다.
         self.memory = memory
+        # 요청한 사람과 관리자(as_viewer). viewer가 None이면 로그인이 꺼진 것이라 모두 할 수 있다(jobs/access.py).
+        self.viewer = None
+        self.admins = frozenset()
+
+    def as_viewer(self, user, admins=frozenset()):
+        """요청한 사람의 권한으로 읽고 고치는 사본. 저장소와 처리 큐는 원래 서비스와 같이 쓴다."""
+        scoped = copy.copy(self)
+        scoped.viewer, scoped.admins = user, frozenset(admins)
+        return scoped
+
+    def visible(self, job):
+        return access(job, self.viewer, self.admins)[VIEW]
 
     # 읽기
 
-    def get(self, job_id):
+    def get(self, job_id, level=VIEW):
+        """level은 하려는 일(보기, 고치기, 관리)이다. 권한이 없으면 403, 볼 수도 없으면 404를 낸다."""
         job = self.store.read(job_id)
         if job is None:
             raise NotFound("회의록을 찾을 수 없어요.")
+        require(job, self.viewer, self.admins, level)
         return job
 
     @staticmethod
@@ -89,15 +105,19 @@ class JobService:
         return apply_speaker_names(self.notes(job["id"]), speakers or self.speakers(job))
 
     def list(self):
-        return public_jobs(self.store)
+        return public_jobs(self.store, self.visible)
 
     def documents(self, job_id):
         return [{"name": path.name, "size": path.stat().st_size} for path in find_documents(self.store.path(job_id))]
 
     def detail(self, job_id):
-        self.get(job_id)
+        job = self.get(job_id)
         view = next(view for view in public_jobs(self.store) if view["id"] == job_id)
         view["documents"] = self.documents(job_id)
+        view["login"] = self.viewer is not None
+        view["owner"] = job.get("owner")
+        view["attendees"] = job.get("attendees") or []
+        view["access"] = access(job, self.viewer, self.admins)
         if view["status"] == "done":
             # 목록을 읽기 전에 읽은 상태를 쓰면, 그 사이에 끝난 작업의 화자 이름이 빠진다.
             job = self.get(job_id)
@@ -141,7 +161,7 @@ class JobService:
             return []
         results = []
         for job in self.store.all():
-            if job["status"] != "done":
+            if job["status"] != "done" or not self.visible(job):
                 continue
             turns = self.turns(job["id"])
             speakers = self.speakers(job, turns)
@@ -204,8 +224,8 @@ class JobService:
 
     # 회의 자료
 
-    def document_path(self, job_id, name):
-        self.get(job_id)
+    def document_path(self, job_id, name, level=VIEW):
+        self.get(job_id, level)
         found = next((path for path in find_documents(self.store.path(job_id)) if path.name == name), None)
         if found is None:
             raise NotFound("자료를 찾을 수 없어요.")
@@ -213,7 +233,7 @@ class JobService:
 
     def document_upload_path(self, job_id):
         """올라오는 자료를 잠시 받아 둘 파일. 확장자가 달라 자료 목록에는 보이지 않는다."""
-        self.get(job_id)
+        self.get(job_id, EDIT)
         folder = self.store.path(job_id) / DOCUMENTS_DIR
         folder.mkdir(exist_ok=True)
         return folder / f".upload-{uuid.uuid4().hex}.tmp"
@@ -244,7 +264,7 @@ class JobService:
         return self.detail(job_id)
 
     def delete_document(self, job_id, name):
-        path = self.document_path(job_id, name)
+        path = self.document_path(job_id, name, EDIT)
         path.unlink()
         self.mark_documents_changed(self.get(job_id))
         return self.detail(job_id)
@@ -270,7 +290,7 @@ class JobService:
         os.replace(temp, notes_path)
 
     def edit_notes(self, job_id, notes):
-        job = self.get(job_id)
+        job = self.get(job_id, EDIT)
         self.require_done(job)
         notes = fix_spelling(notes)
         draft_path = self.store.path(job_id) / "notes.draft.md"
@@ -285,7 +305,7 @@ class JobService:
 
         note는 확인한 내용이다. remember면 다음 회의록과 질문 답변에 참고하도록 등록한다.
         """
-        job = self.get(job_id)
+        job = self.get(job_id, EDIT)
         self.require_done(job)
         lines = self.notes(job_id).split("\n")
         in_checks, count = False, -1
@@ -312,7 +332,7 @@ class JobService:
         return self.detail(job_id)
 
     def rename_speaker(self, job_id, label, name, remember):
-        job = self.get(job_id)
+        job = self.get(job_id, EDIT)
         self.require_done(job)
         if not SPEAKER_LABEL.fullmatch(label) or all(turn["speaker"] != label for turn in self.turns(job_id)):
             raise NotFound("화자를 찾을 수 없어요.")
@@ -352,14 +372,29 @@ class JobService:
         return item
 
     def confirm(self, job_id):
-        self.require_done(self.get(job_id))
+        self.require_done(self.get(job_id, EDIT))
         self.store.update(job_id, confirmed_at=now())
+        return self.detail(job_id)
+
+    def set_access(self, job_id, subs, private, users):
+        """참석자와 "참석자만 보기"를 정한다. 참석자는 이 앱에 로그인한 적이 있는 사람(users) 중에서 고른다."""
+        job = self.get(job_id, MANAGE)
+        owner = (job.get("owner") or {}).get("sub")
+        attendees = []
+        for sub in dict.fromkeys(str(sub) for sub in subs):
+            if owner is not None and sub == str(owner):
+                continue
+            person = users.get(sub)
+            if person is None:
+                raise NotFound("참석자로 고른 사람을 찾을 수 없어요. 한 번 이상 로그인한 사람만 고를 수 있어요.")
+            attendees.append(person)
+        self.store.update(job_id, attendees=attendees, private=private)
         return self.detail(job_id)
 
     # 처리 다시 하기, 멈추기, 지우기
 
     def regenerate(self, job_id, template):
-        job = self.get(job_id)
+        job = self.get(job_id, EDIT)
         self.require_done(job)
         require_template(template)
         if self.worker.is_running(job_id):
@@ -374,7 +409,7 @@ class JobService:
         return self.detail(job_id)
 
     def retry(self, job_id):
-        job = self.get(job_id)
+        job = self.get(job_id, EDIT)
         if job["status"] not in ("failed", "canceled"):
             raise Conflict("실패하거나 멈춘 작업만 다시 시작할 수 있어요.")
         if self.worker.is_running(job_id):
@@ -384,14 +419,14 @@ class JobService:
         return self.detail(job_id)
 
     def cancel(self, job_id):
-        job = self.get(job_id)
+        job = self.get(job_id, EDIT)
         if job["status"] not in ACTIVE_STATUSES:
             raise Conflict("처리 중인 작업만 멈출 수 있어요.")
         self.worker.cancel(job_id)
         return self.detail(job_id)
 
     def delete(self, job_id):
-        job = self.get(job_id)
+        job = self.get(job_id, MANAGE)
         if job["status"] in ACTIVE_STATUSES:
             raise Conflict("처리 중인 회의록은 먼저 멈춰 주세요.")
         if self.worker.is_running(job_id):

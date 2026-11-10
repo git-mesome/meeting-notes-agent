@@ -117,7 +117,7 @@ def log_in(client, sso, next_path="/"):
 def test_without_auth_settings_everything_is_open(tmp_path):
     with TestClient(create_app(data_dir=tmp_path, process=idle_process, tracker=None, auth=None), base_url="http://127.0.0.1") as client:
         assert client.get("/api/jobs").status_code == 200
-        assert client.get("/api/me").json() == {"login": False, "name": None}
+        assert client.get("/api/me").json() == {"login": False, "name": None, "sub": None}
 
 
 def test_api_needs_login_and_pages_go_to_sso(tmp_path, sso):
@@ -141,7 +141,8 @@ def test_login_flow_uses_pkce_and_opens_the_app(tmp_path, sso, tone):
         challenge = base64.urlsafe_b64encode(hashlib.sha256(form["code_verifier"].encode()).digest()).rstrip(b"=").decode()
         assert challenge == query["code_challenge"] and form["code"] == "abc"
 
-        assert client.get("/api/me").json() == {"login": True, "name": "홍길동"}
+        assert client.get("/api/me").json() == {"login": True, "name": "홍길동", "sub": "u1"}
+        assert client.get("/api/users").json() == [{"sub": "u1", "name": "홍길동"}]
         job = client.post("/api/jobs", files={"file": ("a.m4a", tone, "audio/mp4")}).json()
         meta = json.loads((tmp_path / job["id"] / "meta.json").read_text(encoding="utf-8"))
         assert meta["owner"] == {"sub": "u1", "name": "홍길동"}

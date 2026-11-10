@@ -110,6 +110,8 @@ function checkItem(text, done, index, onTime, onCheck) {
   const body = split >= 0 ? text.slice(0, split) : text;
   const box = el("input", { type: "checkbox", class: "check-box", "aria-label": "확인함" });
   box.checked = done;
+  // 고칠 수 없는 사람에게는 확인 표시만 보인다(jobs/access.py).
+  box.disabled = !onCheck;
   const noteLine = el("span", { class: "check-note", "data-ui": "" });
   const item = el(
     "li",

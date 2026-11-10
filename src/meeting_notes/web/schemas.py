@@ -26,6 +26,11 @@ class Regenerate(BaseModel):
     template: str
 
 
+class AccessUpdate(BaseModel):
+    attendees: list[str] = Field(default_factory=list, max_length=100)
+    private: bool = False
+
+
 class IssueDraft(BaseModel):
     source: int
     title: str = Field(min_length=2, max_length=200)

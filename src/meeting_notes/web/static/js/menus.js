@@ -55,76 +55,40 @@ export async function openTemplateMenu(job) {
   ]);
 }
 
-export function openMoreMenu(job, { onDocuments }) {
-  openSheet((close) => [
-    el(
-      "div",
-      { class: "sheet-menu" },
+export function openMoreMenu(job, { onDocuments, onPeople }) {
+  // 할 수 없는 일은 메뉴에서 뺀다(jobs/access.py). 자료는 고칠 수 없어도 붙은 것이 있으면 내려받게 한다.
+  const can = job.access;
+  const item = (iconName, label, onclick, extra = "") =>
+    el("button", { class: `sheet-item ${extra}`.trim(), type: "button", onclick }, icon(iconName), label);
+  openSheet((close) => {
+    const then = (action) => () => {
+      close();
+      action();
+    };
+    return [
       el(
-        "button",
-        {
-          class: "sheet-item",
-          type: "button",
-          onclick: () => {
-            close();
-            openTemplateMenu(job);
-          },
-        },
-        icon("rewrite"),
-        "다른 양식으로 다시 쓰기",
+        "div",
+        { class: "sheet-menu" },
+        can.edit ? item("rewrite", "다른 양식으로 다시 쓰기", then(() => openTemplateMenu(job))) : null,
+        can.edit || job.documents.length
+          ? item("upload", can.edit ? "회의 자료 붙이기" : "회의 자료 보기", then(onDocuments))
+          : null,
+        can.manage && job.login ? item("people", "참석자와 공개 범위", then(onPeople)) : null,
+        can.edit ? item("pencil", "마크다운으로 전체 수정", then(() => renderEditor(job))) : null,
+        el(
+          "a",
+          { class: "sheet-item", href: `/api/jobs/${job.id}/download`, onclick: close },
+          icon("download"),
+          "내려받기",
+        ),
+        el(
+          "a",
+          { class: "sheet-item", href: `/api/jobs/${job.id}/share`, onclick: close },
+          icon("download"),
+          "공유용 HTML 내려받기",
+        ),
+        can.manage ? item("trash", "삭제하기", then(() => deleteJob(job)), "danger") : null,
       ),
-      el(
-        "button",
-        {
-          class: "sheet-item",
-          type: "button",
-          onclick: () => {
-            close();
-            onDocuments();
-          },
-        },
-        icon("upload"),
-        "회의 자료 붙이기",
-      ),
-      el(
-        "button",
-        {
-          class: "sheet-item",
-          type: "button",
-          onclick: () => {
-            close();
-            renderEditor(job);
-          },
-        },
-        icon("pencil"),
-        "마크다운으로 전체 수정",
-      ),
-      el(
-        "a",
-        { class: "sheet-item", href: `/api/jobs/${job.id}/download`, onclick: close },
-        icon("download"),
-        "내려받기",
-      ),
-      el(
-        "a",
-        { class: "sheet-item", href: `/api/jobs/${job.id}/share`, onclick: close },
-        icon("download"),
-        "공유용 HTML 내려받기",
-      ),
-      el(
-        "button",
-        {
-          class: "sheet-item danger",
-          type: "button",
-          onclick: () => {
-            close();
-            deleteJob(job);
-          },
-        },
-        icon("trash"),
-        "삭제하기",
-      ),
-    ),
-  ]);
+    ];
+  });
 }
-

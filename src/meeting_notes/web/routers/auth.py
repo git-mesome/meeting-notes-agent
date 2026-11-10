@@ -1,4 +1,4 @@
-"""SSO 로그인과 로그아웃. 로그인을 켜지 않았으면 첫 화면으로 보낸다."""
+"""SSO 로그인과 로그아웃, 로그인한 적 있는 사람 목록. 로그인을 켜지 않았으면 첫 화면으로 보낸다."""
 
 import logging
 
@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 
 from meeting_notes.auth import FLOW_COOKIE, FLOW_SECONDS, SESSION_COOKIE, AuthError
-from meeting_notes.web.deps import Auth, User
+from meeting_notes.web.deps import Auth, User, Users
 from meeting_notes.web.pages import login_page
 
 logger = logging.getLogger(__name__)
@@ -16,7 +16,14 @@ router = APIRouter()
 
 @router.get("/api/me")
 def me(auth: Auth, user: User):
-    return {"login": auth is not None, "name": user["name"] if user else None}
+    """sub는 관리자(company.toml [auth]의 admin_subs)로 적을 값을 찾을 때 쓴다."""
+    return {"login": auth is not None, "name": user["name"] if user else None, "sub": user["sub"] if user else None}
+
+
+@router.get("/api/users")
+def users_list(users: Users, user: User):
+    """회의 참석자로 고를 수 있는 사람. 로그인을 켜지 않았으면 고를 사람이 없다."""
+    return users.list() if user else []
 
 
 @router.get("/auth/login")
@@ -34,7 +41,7 @@ def login(auth: Auth, next: str = "/"):
 
 
 @router.get("/auth/callback")
-def login_callback(request: Request, auth: Auth, code: str = "", state: str = "", error: str = ""):
+def login_callback(request: Request, auth: Auth, users: Users, code: str = "", state: str = "", error: str = ""):
     if auth is None:
         return RedirectResponse("/", status_code=303)
     if error or not code:
@@ -44,6 +51,7 @@ def login_callback(request: Request, auth: Auth, code: str = "", state: str = ""
     except AuthError as failure:
         logger.warning("로그인 실패: %s", failure)
         return login_page(str(failure), failure.status)
+    users.seen(user)
     response = RedirectResponse(next_path, status_code=303)
     response.set_cookie(
         SESSION_COOKIE,

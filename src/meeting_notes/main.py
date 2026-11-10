@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from meeting_notes import settings
+from meeting_notes.auth import UserBook
 from meeting_notes.errors import AppError
 from meeting_notes.issues.service import IssueService, link_issues
 from meeting_notes.jobs.service import JobService
@@ -86,6 +87,7 @@ def create_app(
         memory=memory,
         push=push_center,
         auth=auth,
+        users=UserBook(data_dir),
     )
 
     @asynccontextmanager

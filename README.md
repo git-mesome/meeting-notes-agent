@@ -125,12 +125,25 @@ client_id = "meeting-notes"
 client_secret_env = "SSO_CLIENT_SECRET"
 role_claim = "role"
 allowed_roles = []                         # 비우면 로그인한 사람 모두
+admin_subs = []                            # 모든 회의를 고치고 지우는 사람의 sub. 내 sub는 로그인 뒤 /api/me에서 본다.
 ```
 
 - SSO에 앱을 등록할 때 redirect URI는 `<PUBLIC_URL>/auth/callback`, 로그아웃 뒤 이동 주소는 `<PUBLIC_URL>/`이다.
 - authorization code + PKCE(S256)로 로그인하고, ID 토큰의 서명(RS256), 발급자, 대상, 만료, nonce를 확인한다.
 - 로그인 상태는 서버 키로 서명한 쿠키(HttpOnly, SameSite=Lax)에 둔다. 키는 `jobs/session-key`에 있다.
-- 올린 사람은 회의마다 `meta.json`의 `owner`에 남는다.
+- 올린 사람은 회의마다 `meta.json`의 `owner`에 남는다. 로그인한 사람은 `jobs/users.json`에 남아 참석자를 고르는 목록이 된다.
+
+로그인을 켜면 회의마다 권한을 따진다(`jobs/access.py`). 화면은 할 수 없는 일의 버튼을 숨기고, 서버는 같은 규칙으로 403을 낸다.
+
+| 할 일 | 할 수 있는 사람 |
+|---|---|
+| 보기: 회의록, 녹음, 전사문, 자료 내려받기, 질문, 검색 | 로그인한 사람 모두. "참석자만 보기"를 켠 회의는 올린 사람, 참석자, 관리자만 |
+| 고치기: 회의록, 확인 필요, 화자 이름, 확정, 다시 쓰기, 자료, 이슈 등록, 중지와 다시 시작 | 올린 사람, 참석자, 관리자 |
+| 관리: 지우기, 참석자와 공개 범위 정하기 | 올린 사람, 관리자 |
+
+- 참석자는 올린 사람이 더보기의 "참석자와 공개 범위"에서 고른다. 이 사이트에 한 번 이상 로그인한 사람만 고를 수 있다.
+- "참석자만 보기"를 켠 회의는 다른 사람의 목록과 검색에 나오지 않고, 주소로 열어도 찾을 수 없다고 나온다.
+- 로그인을 켜기 전에 올린 회의는 올린 사람이 없어 관리자만 고치고 관리한다. 관리자가 참석자를 정해 주면 그 사람도 고칠 수 있다.
 
 ### 핸드폰에서 접속
 
@@ -256,18 +269,18 @@ src/meeting_notes/
 │   ├── middleware.py    보안 헤더, Host·Origin 검사, 로그인 검사
 │   ├── pages.py         index.html, 서비스 워커, 로그인 안내
 │   └── static/          화면: js/(화면별 ES 모듈), css/(화면별 스타일)
-├── jobs/                store(meta.json), worker(처리 큐), views, search, service
+├── jobs/                store(meta.json), worker(처리 큐), views, search, access(회의별 권한), service
 ├── pipeline/            audio → transcribe → turns → notes, process가 이어서 실행. documents는 회의 자료
 ├── speakers/            화자 이름, 목소리 특징, 목소리 등록과 대조
 ├── issues/              trackers(어댑터 규격), actions, drafting, service
-├── auth/                oidc(SSO 로그인), session(쿠키 서명)
+├── auth/                oidc(SSO 로그인), session(쿠키 서명), users(로그인한 적 있는 사람)
 └── notifications/       웹 푸시(VAPID)
 company.example/         회사 폴더 예시와 연습용 트래커
 scripts/                 push_all.sh(GitHub·GitLab에 올리기), deploy.sh(GitLab CI의 서버 배포)
 tests/                   pytest, 화면 개발용 가짜 서버
 ```
 
-스프링에 빗대면 `web/routers`가 `@RestController`, `jobs/service.py`와 `issues/service.py`가 `@Service`, `jobs/store.py`가 Repository, `web/schemas.py`가 DTO, `web/middleware.py`가 Filter, `web/deps.py`의 `Depends`가 생성자 주입, `main.py`가 `@Configuration`이다.
+스프링에 빗대면 `web/routers`가 `@RestController`, `jobs/service.py`와 `issues/service.py`가 `@Service`, `jobs/store.py`가 Repository, `web/schemas.py`가 DTO, `web/middleware.py`가 Filter, `web/deps.py`의 `Depends`가 생성자 주입, `main.py`가 `@Configuration`이다. 회의별 권한은 `jobs/access.py`의 규칙을 서비스가 메서드마다 확인한다(`@PreAuthorize`에 해당). `web/deps.py`가 요청마다 로그인한 사람을 넣은 서비스 사본을 만든다(request scope).
 
 ### 데이터
 
@@ -275,7 +288,7 @@ tests/                   pytest, 화면 개발용 가짜 서버
 
 | 경로 | 내용 |
 |---|---|
-| `jobs/<id>/meta.json` | 상태, 제목, 양식, 화자 이름, 등록한 이슈 |
+| `jobs/<id>/meta.json` | 상태, 제목, 양식, 화자 이름, 등록한 이슈, 올린 사람, 참석자, 공개 범위 |
 | `jobs/<id>/audio.*` | 올린 녹음 |
 | `jobs/<id>/audio.json` | WhisperX 결과 |
 | `jobs/<id>/turns.json`, `transcript.txt` | 화자별 발언 |
@@ -285,6 +298,7 @@ tests/                   pytest, 화면 개발용 가짜 서버
 | `jobs/<id>/issue_drafts.json` | 이슈 초안 |
 | `jobs/voices.json` | 등록한 목소리(권한 600) |
 | `jobs/memory.json` | 등록한 이름·표기(권한 600) |
+| `jobs/users.json` | 로그인한 적이 있는 사람의 sub와 이름(권한 600) |
 | `jobs/push-key.pem`, `jobs/push-subscriptions.json` | 웹 푸시 키와 구독 정보 |
 | `jobs/session-key` | 로그인 쿠키 서명 키(권한 600) |
 
@@ -298,6 +312,7 @@ tests/                   pytest, 화면 개발용 가짜 서버
 | `GET` | `/api/jobs` | 작업 목록과 대기 순서, 예상 시간 |
 | `GET` | `/api/jobs/{id}` | 작업 상세. 완료되면 회의록, 발언, 화자, 질문, 등록한 이슈를 함께 준다. |
 | `DELETE` | `/api/jobs/{id}` | 삭제 |
+| `PUT` | `/api/jobs/{id}/access` | 참석자(`attendees`: sub 목록)와 "참석자만 보기"(`private`) |
 | `POST` | `/api/jobs/{id}/cancel`, `/retry` | 중지, 다시 시작 |
 | `PUT` | `/api/jobs/{id}/notes` | 회의록 수정 |
 | `POST` | `/api/jobs/{id}/documents` | 회의 자료 붙이기(multipart) |
@@ -314,6 +329,7 @@ tests/                   pytest, 화면 개발용 가짜 서버
 | `POST` | `/api/jobs/{id}/issues` | 이슈 등록 |
 | `GET` | `/api/search?q=` | 회의록, 전사문 검색 |
 | `GET` | `/api/templates`, `/api/tracker`, `/api/me` | 양식 목록, 트래커 연동 상태, 로그인한 사용자 |
+| `GET` | `/api/users` | 참석자로 고를 수 있는 사람(로그인한 적이 있는 사람) |
 | `GET` | `/auth/login?next=`, `/auth/callback`, `/auth/logout` | SSO 로그인과 로그아웃 |
 | `GET`, `DELETE` | `/api/voices`, `/api/voices/{id}` | 등록한 목소리 목록, 삭제 |
 | `GET`, `POST` | `/api/push/key`, `/subscribe`, `/unsubscribe` | 웹 푸시 |
@@ -359,7 +375,7 @@ i7-1360P, `large-v3` int8, 8스레드 기준으로 음성 길이의 2.2~2.7배�
 
 ## 한계
 
-- 로그인한 사람은 모두 모든 회의록을 본다. 사람별로 나눠 보는 기능은 아직 없다.
+- 등록한 목소리, 이름·표기, 완료 알림은 아직 사람별로 나뉘지 않고 서버 전체에 하나다.
 - 로그인을 켜면 아이폰 단축어로 올릴 수 없다. 단축어는 SSO 로그인을 할 수 없기 때문이다.
 - CPU로 처리해 녹음 길이보다 두 배 이상 오래 걸리고, 그동안 노트북이 켜져 있어야 한다.
 - 마이크 하나로 녹음하므로 짧게 끼어든 말은 다른 화자의 발언에 섞일 수 있다.

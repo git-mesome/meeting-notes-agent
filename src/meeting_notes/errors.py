@@ -9,6 +9,10 @@ class AppError(Exception):
         self.message = message
 
 
+class Forbidden(AppError):
+    status = 403
+
+
 class NotFound(AppError):
     status = 404
 

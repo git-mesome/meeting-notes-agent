@@ -66,7 +66,8 @@ export function renderWaiting(job) {
         }
       },
     });
-    bar.append(stop, attach);
+    // 고칠 수 없는 사람은 진행 상황만 본다(jobs/access.py).
+    if (job.access.edit) bar.append(stop, attach);
 
     const refresh = async () => {
       let latest;
@@ -101,7 +102,8 @@ export function renderWaiting(job) {
         }
       },
     });
-    bar.append(button("삭제", { onclick: () => deleteJob(job) }), restart);
+    if (job.access.manage) bar.append(button("삭제", { onclick: () => deleteJob(job) }));
+    if (job.access.edit) bar.append(restart);
   }
 
   page.append(content, el("div", { class: "bottom-bar" }, bar));

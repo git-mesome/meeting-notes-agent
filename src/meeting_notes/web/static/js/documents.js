@@ -14,8 +14,10 @@ export function documentsText(job) {
   return job.documents.length ? `자료 ${job.documents.length}개를 붙였어요. 회의록을 쓸 때 함께 봐요.` : "";
 }
 
-/* 자료 목록 창. 붙이거나 지운 게 있으면 창을 닫을 때 onClose(최신 작업)를 부른다. */
+/* 자료 목록 창. 붙이거나 지운 게 있으면 창을 닫을 때 onClose(최신 작업)를 부른다.
+   회의록을 고칠 수 없는 사람은 목록을 보고 내려받기만 한다(jobs/access.py). */
 export function openDocumentsSheet(job, onClose) {
+  const editable = job.access.edit;
   let latest = job;
   let changed = false;
   const list = el("ul", { class: "note-list document-list" });
@@ -47,7 +49,7 @@ export function openDocumentsSheet(job, onClose) {
           }),
           el("span", { class: "meta", text: sizeText(doc.size) }),
         ),
-        button("삭제", { onclick: () => remove(doc) }),
+        editable ? button("삭제", { onclick: () => remove(doc) }) : null,
       ),
     );
     list.replaceChildren(...(rows.length ? rows : [el("li", { class: "document-empty", text: "아직 붙인 자료가 없어요." })]));
@@ -79,9 +81,11 @@ export function openDocumentsSheet(job, onClose) {
       text: "회의에서 같이 본 PDF나 화면 캡처를 붙이면 이름, 숫자, '이거'가 가리키는 내용을 더 정확하게 정리해요. 회의에서 말하지 않은 자료 내용은 회의록에 넣지 않아요.",
     }),
     list,
-    el("p", { class: "input-hint", text: "PDF, 이미지, 텍스트, HTML 파일을 붙일 수 있어요. PPT나 엑셀은 PDF로 저장해서 올려 주세요." }),
-    picker,
-    el("div", { class: "sheet-actions" }, button("닫기", { onclick: close }), add),
+    editable
+      ? el("p", { class: "input-hint", text: "PDF, 이미지, 텍스트, HTML 파일을 붙일 수 있어요. PPT나 엑셀은 PDF로 저장해서 올려 주세요." })
+      : null,
+    editable ? picker : null,
+    el("div", { class: "sheet-actions" }, button("닫기", { onclick: close }), editable ? add : null),
   ]);
   sheet.addEventListener("close", () => {
     if (changed) onClose(latest);
