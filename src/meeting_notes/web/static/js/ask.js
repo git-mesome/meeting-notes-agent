@@ -1,6 +1,7 @@
 /* 회의 내용 질문. */
 
 import { api, jsonOptions } from "./api.js";
+import { inline } from "./notes.js";
 import { el, icon, toast } from "./ui.js";
 
 export function renderAsk(job, seek, friendly) {
