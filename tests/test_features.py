@@ -320,6 +320,19 @@ def test_voice_register_averages_same_name_and_file_is_private(tmp_path):
     assert (tmp_path / "voices.json").stat().st_mode & 0o077 == 0
 
 
+def test_voices_merge_only_within_the_same_registrant(tmp_path):
+    book = VoiceBook(tmp_path)
+    gildong, chulsoo = {"sub": "u1", "name": "홍길동"}, {"sub": "u2", "name": "김철수"}
+    book.register("길동", [1.0, 0.0], gildong)
+    book.register("길동", [0.0, 1.0], gildong)
+    # 다른 사람이 같은 이름으로 잘못 등록해도 먼저 등록한 목소리에 섞이지 않는다.
+    book.register("길동", [0.0, 1.0], chulsoo)
+    listed = book.list()
+    assert [(voice["owner"], voice["samples"]) for voice in listed] == [(gildong, 2), (chulsoo, 1)]
+    # 같은 이름은 한 화자에게만 붙인다.
+    assert list(book.match({"A": [0.0, 1.0], "B": [0.6, 0.8]})) == ["A"]
+
+
 def test_name_alone_does_not_store_voice(client, tone):
     job_id = upload(client, tone)
     wait_done(client, job_id)

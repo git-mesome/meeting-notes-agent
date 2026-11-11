@@ -6,7 +6,9 @@ from fastapi.testclient import TestClient
 from meeting_notes.auth import OIDC, SESSION_COOKIE, UserBook
 from meeting_notes.jobs.store import JobStore
 from meeting_notes.main import create_app
+from meeting_notes.speakers.voices import VoiceBook
 from tests.test_app import fake_process, tone, upload, wait_for  # noqa: F401
+from tests.test_features import fake_process as voice_process
 
 SETTINGS = {
     "issuer": "http://sso.example/oidc",
@@ -20,13 +22,12 @@ OTHER = {"sub": "u3", "name": "이영희"}
 ADMIN = {"sub": "admin", "name": "관리자"}
 
 
-@pytest.fixture
-def site(tmp_path):
+def open_site(tmp_path, process):
     oidc = OIDC(SETTINGS, tmp_path)
     users = UserBook(tmp_path)
     for person in (OWNER, ATTENDEE, OTHER, ADMIN):
         users.seen(person)
-    app = create_app(data_dir=tmp_path, process=fake_process, tracker=None, auth=oidc)
+    app = create_app(data_dir=tmp_path, process=process, tracker=None, auth=oidc)
     with TestClient(app, base_url="http://127.0.0.1") as client:
 
         def act_as(user):
@@ -34,6 +35,17 @@ def site(tmp_path):
             return client
 
         yield act_as
+
+
+@pytest.fixture
+def site(tmp_path):
+    yield from open_site(tmp_path, fake_process)
+
+
+@pytest.fixture
+def voice_site(tmp_path):
+    """화자마다 목소리 특징을 남기는 처리로 연다."""
+    yield from open_site(tmp_path, voice_process)
 
 
 def meeting(site, tone, **access):
@@ -113,6 +125,32 @@ def test_admin_manages_meetings_uploaded_before_login(site, tone, tmp_path):
     assert admin.get(f"/api/jobs/{job_id}").json()["access"] == {"view": True, "edit": True, "manage": True}
     assert admin.put(f"/api/jobs/{job_id}/access", json={"attendees": [OWNER["sub"]]}).status_code == 200
     assert site(OWNER).put(f"/api/jobs/{job_id}/notes", json={"notes": "# 회의록: 바꿈\n"}).status_code == 200
+
+
+def test_voices_are_shared_but_only_registrant_or_admin_deletes(voice_site, tone, tmp_path):
+    owner = voice_site(OWNER)
+    job_id = upload(owner, tone)
+    wait_for(owner, job_id, "done")
+    owner.put(f"/api/jobs/{job_id}/speakers/SPEAKER_00", json={"name": "길동", "remember": True})
+    VoiceBook(tmp_path).register("예전 목소리", [0.0, 0.0, 1.0])  # 로그인을 켜기 전에 등록한 목소리
+
+    other = voice_site(OTHER)
+    voices = {voice["name"]: voice for voice in other.get("/api/voices").json()}
+    assert voices["길동"]["owner"] == OWNER and voices["길동"]["can_delete"] is False
+    assert voices["예전 목소리"]["owner"] is None and voices["예전 목소리"]["can_delete"] is False
+    refused = other.delete(f"/api/voices/{voices['길동']['id']}")
+    assert refused.status_code == 403 and refused.json()["detail"] == "목소리를 등록한 사람과 관리자만 지울 수 있어요."
+
+    # 다른 사람이 올린 회의에서도 알아본다.
+    attendee = voice_site(ATTENDEE)
+    second = upload(attendee, tone)
+    job = wait_for(attendee, second, "done")
+    assert next(s for s in job["speakers"] if s["label"] == "SPEAKER_00")["name"] == "길동"
+
+    assert voice_site(OWNER).delete(f"/api/voices/{voices['길동']['id']}").status_code == 200
+    assert voice_site(OWNER).delete(f"/api/voices/{voices['예전 목소리']['id']}").status_code == 403
+    assert voice_site(ADMIN).delete(f"/api/voices/{voices['예전 목소리']['id']}").status_code == 200
+    assert voice_site(OTHER).get("/api/voices").json() == []
 
 
 def test_without_login_everyone_can_do_everything(tmp_path, tone):

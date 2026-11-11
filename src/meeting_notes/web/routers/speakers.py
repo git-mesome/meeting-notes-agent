@@ -2,8 +2,7 @@
 
 from fastapi import APIRouter
 
-from meeting_notes.errors import NotFound
-from meeting_notes.web.deps import Jobs, Voices
+from meeting_notes.web.deps import Admins, Jobs, User, Voices
 from meeting_notes.web.schemas import SpeakerName
 
 router = APIRouter(prefix="/api")
@@ -15,12 +14,11 @@ def rename_speaker(job_id: str, label: str, body: SpeakerName, jobs: Jobs):
 
 
 @router.get("/voices")
-def list_voices(voices: Voices):
-    return voices.list()
+def list_voices(voices: Voices, user: User, admins: Admins):
+    return voices.list(user, admins)
 
 
 @router.delete("/voices/{voice_id}")
-def delete_voice(voice_id: str, voices: Voices):
-    if not voices.delete(voice_id):
-        raise NotFound("등록된 목소리를 찾을 수 없어요.")
+def delete_voice(voice_id: str, voices: Voices, user: User, admins: Admins):
+    voices.delete(voice_id, user, admins)
     return {"ok": True}

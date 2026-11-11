@@ -1,6 +1,8 @@
 """등록한 사람의 목소리 특징을 저장하고 새 회의의 화자와 대조한다.
 
-목소리 특징은 생체 정보다. 이 노트북 밖으로 보내지 않고, 사용자가 사람별로 직접 켠 경우에만 저장한다.
+목소리 특징은 생체 정보다. 회의록 서버 밖으로 보내지 않고, 사용자가 사람별로 직접 켠 경우에만 저장한다.
+등록한 목소리는 누가 올린 회의든 같이 쓴다. 누가 등록했는지(owner) 남기고, 지우기는 등록한 사람과 관리자만
+한다(jobs/access.py). 로그인을 켜기 전에 등록한 목소리는 owner가 없어 관리자만 지운다.
 """
 
 import json
@@ -10,11 +12,17 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from meeting_notes.errors import Forbidden, NotFound
 from meeting_notes.files import write_private
+from meeting_notes.jobs.access import owns
 
 # 같은 회의의 두 구간에서 잰 값은 같은 사람 0.81~0.93, 다른 사람 0.61 이하였다. 다른 이름을 붙이는 쪽이 더
 # 해로우므로 높게 잡았다. 날짜와 장소가 다른 회의에서는 점수가 낮아질 수 있어 녹음이 쌓이면 다시 재야 한다.
 MATCH_THRESHOLD = 0.75
+
+
+def owner_sub(owner):
+    return str(owner["sub"]) if owner else None
 
 
 def cosine(a, b):
@@ -36,18 +44,27 @@ class VoiceBook:
     def _save(self, voices):
         write_private(self.path, json.dumps(voices, ensure_ascii=False))
 
-    def list(self):
+    def list(self, user=None, admins=frozenset()):
+        """can_delete는 user가 이 목소리를 지울 수 있는지다. 화면은 이 값으로 삭제 버튼을 숨긴다."""
         with self.lock:
             voices = self._load()
-        return [{key: voice[key] for key in ("id", "name", "samples", "updated_at")} for voice in voices]
+        return [
+            {
+                **{key: voice[key] for key in ("id", "name", "samples", "updated_at")},
+                "owner": voice.get("owner"),
+                "can_delete": owns(voice.get("owner"), user, admins),
+            }
+            for voice in voices
+        ]
 
-    def register(self, name, embedding):
-        """이름이 같으면 평균을 내서 합친다."""
+    def register(self, name, embedding, owner=None):
+        """같은 사람이 같은 이름으로 다시 등록하면 평균을 내서 합친다. 다른 사람이 등록한 목소리와는 합치지 않아,
+        한 사람이 잘못 등록해도 다른 사람이 등록한 목소리는 그대로 남는다. owner는 등록한 사람({sub, name})이다."""
         with self.lock:
             voices = self._load()
             now = datetime.now(timezone.utc).isoformat()
             for voice in voices:
-                if voice["name"] == name:
+                if voice["name"] == name and owner_sub(voice.get("owner")) == owner_sub(owner):
                     count = voice["samples"]
                     voice["embedding"] = [
                         (old * count + new) / (count + 1) for old, new in zip(voice["embedding"], embedding)
@@ -57,21 +74,32 @@ class VoiceBook:
                     break
             else:
                 voices.append(
-                    {"id": uuid.uuid4().hex, "name": name, "embedding": embedding, "samples": 1, "updated_at": now}
+                    {
+                        "id": uuid.uuid4().hex,
+                        "name": name,
+                        "embedding": embedding,
+                        "samples": 1,
+                        "updated_at": now,
+                        "owner": owner,
+                    }
                 )
             self._save(voices)
 
-    def delete(self, voice_id):
+    def delete(self, voice_id, user=None, admins=frozenset()):
         with self.lock:
             voices = self._load()
-            remaining = [voice for voice in voices if voice["id"] != voice_id]
-            if len(remaining) == len(voices):
-                return False
-            self._save(remaining)
-            return True
+            voice = next((voice for voice in voices if voice["id"] == voice_id), None)
+            if voice is None:
+                raise NotFound("등록된 목소리를 찾을 수 없어요.")
+            if not owns(voice.get("owner"), user, admins):
+                raise Forbidden("목소리를 등록한 사람과 관리자만 지울 수 있어요.")
+            self._save([other for other in voices if other["id"] != voice_id])
 
     def match(self, embeddings):
-        """화자 라벨마다 가장 비슷한 사람을 찾는다. 한 사람은 한 화자에게만 붙인다."""
+        """화자 라벨마다 가장 비슷한 사람을 찾는다. 한 이름은 한 화자에게만 붙인다.
+
+        여러 사람이 같은 이름으로 따로 등록했으면 그중 가장 비슷한 목소리로 붙인다.
+        """
         with self.lock:
             voices = self._load()
         pairs = sorted(

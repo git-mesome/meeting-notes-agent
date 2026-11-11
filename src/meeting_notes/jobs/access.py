@@ -8,6 +8,8 @@
 
 참석자는 올린 사람이 정한다(JobService.set_access). 로그인을 켜기 전에 올린 회의는 올린 사람이 없어 관리자만
 고치고 관리한다. 관리자는 company.toml [auth]의 admin_subs다.
+
+등록한 목소리도 같은 규칙(owns)으로 지운다. 모두 같이 쓰고, 등록한 사람과 관리자만 지운다(speakers/voices.py).
 """
 
 from meeting_notes.errors import Forbidden, NotFound
@@ -19,13 +21,20 @@ DENIED = {
 }
 
 
+def owns(owner, user, admins=frozenset()):
+    """올리거나 등록한 사람, 또는 관리자인가. owner가 없으면(로그인을 켜기 전) 관리자만 그렇다."""
+    if user is None:
+        return True
+    sub = str(user["sub"])
+    return sub in admins or (owner is not None and sub == str(owner["sub"]))
+
+
 def access(job, user, admins=frozenset()):
     """user가 이 회의에서 할 수 있는 일. 화면은 이 값을 받아 할 수 없는 버튼을 숨긴다."""
     if user is None:
         return {VIEW: True, EDIT: True, MANAGE: True}
     sub = str(user["sub"])
-    owner = (job.get("owner") or {}).get("sub")
-    manage = sub in admins or (owner is not None and sub == str(owner))
+    manage = owns(job.get("owner"), user, admins)
     edit = manage or any(str(person["sub"]) == sub for person in job.get("attendees") or [])
     return {VIEW: edit or not job.get("private"), EDIT: edit, MANAGE: manage}
 

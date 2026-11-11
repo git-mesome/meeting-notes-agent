@@ -343,7 +343,8 @@ class JobService:
             embedding = load_embeddings(self.store.path(job_id)).get(label)
             if embedding is None:
                 raise Conflict("이 회의에는 목소리 정보가 없어요. 새로 올린 녹음부터 등록할 수 있어요.")
-            self.voices.register(name, embedding)
+            owner = {"sub": str(self.viewer["sub"]), "name": self.viewer["name"]} if self.viewer else None
+            self.voices.register(name, embedding, owner)
         names = dict(job.get("speaker_names") or {})
         if name:
             names[label] = name

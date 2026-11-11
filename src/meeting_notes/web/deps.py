@@ -34,8 +34,7 @@ def services(request: Request) -> Services:
 
 def job_service(request: Request) -> JobService:
     """요청한 사람의 권한으로 회의를 읽고 고친다(jobs/access.py)."""
-    found = services(request)
-    return found.jobs.as_viewer(current_user(request), found.auth.admins if found.auth else ())
+    return services(request).jobs.as_viewer(current_user(request), admin_subs(request))
 
 
 def issue_service(request: Request) -> IssueService:
@@ -66,6 +65,12 @@ def login(request: Request) -> OIDC | None:
     return services(request).auth
 
 
+def admin_subs(request: Request) -> frozenset:
+    """모든 회의와 목소리를 고치고 지우는 사람(company.toml [auth]의 admin_subs)."""
+    auth = services(request).auth
+    return auth.admins if auth else frozenset()
+
+
 def current_user(request: Request) -> dict | None:
     """로그인한 사용자. 로그인을 켜지 않았으면 None이다(middleware.py가 채운다)."""
     return getattr(request.state, "user", None)
@@ -80,3 +85,4 @@ Users = Annotated[UserBook, Depends(user_book)]
 Keys = Annotated[UploadKeys, Depends(upload_keys)]
 Auth = Annotated[OIDC | None, Depends(login)]
 User = Annotated[dict | None, Depends(current_user)]
+Admins = Annotated[frozenset, Depends(admin_subs)]

@@ -274,7 +274,7 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
                   "span",
                   {},
                   el("strong", { text: "다음 회의에서도 이 목소리 알아보기" }),
-                  el("small", { text: "본인 동의를 받은 사람만 켜 주세요. 목소리 특징은 이 기기에만 저장돼요." }),
+                  el("small", { text: "본인 동의를 받은 사람만 켜 주세요. 누가 올린 회의든 이 목소리를 알아보고 이름을 붙여요." }),
                 ),
               )
             : null,
