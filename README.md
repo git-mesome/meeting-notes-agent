@@ -9,6 +9,18 @@
 - 액션 아이템을 이슈 트래커에 등록. 트래커는 어댑터로 붙인다.
 - 회사마다 다른 설정은 `company/` 폴더 하나에 둔다.
 
+## 화면
+
+![회의록 화면(데스크톱): 화자별 발언 비율, 안건별 회의록, 전사문](docs/screenshots/meeting-desktop.png)
+
+<p>
+  <img src="docs/screenshots/home.png" width="32%" alt="첫 화면: 회의 양식을 고르고 녹음을 올린다">
+  <img src="docs/screenshots/meeting-mobile.png" width="32%" alt="핸드폰의 회의록 화면">
+  <img src="docs/screenshots/issues-mobile.png" width="32%" alt="액션 아이템을 이슈 트래커에 등록하는 창">
+</p>
+
+예시 회의(`tests/fake_server.py`)로 찍은 화면이다. 아래 줄은 왼쪽부터 첫 화면(회의 양식 고르기, 녹음 올리기), 핸드폰의 회의록 화면, 액션 아이템을 이슈 트래커에 등록하는 창이다.
+
 ## 동작 방식
 
 ```mermaid
@@ -277,6 +289,7 @@ src/meeting_notes/
 └── notifications/       웹 푸시(VAPID)
 company.example/         회사 폴더 예시와 연습용 트래커
 scripts/                 push_all.sh(GitHub·GitLab에 올리기), deploy.sh(GitLab CI의 서버 배포)
+docs/screenshots/        README의 화면(예시 회의로 찍음)
 tests/                   pytest, 화면 개발용 가짜 서버
 ```
 
