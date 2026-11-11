@@ -229,12 +229,13 @@ export async function renderList() {
           ? el("ul", { class: "note-list" }, ...ordered.map(noteRow))
           : el("p", { class: "empty", text: "아직 회의록이 없어요. 첫 녹음을 올려 보세요." }),
       ),
-      el("p", { class: "hint", text: "아이폰 음성 메모는 공유 메뉴에서 '파일에 저장'한 뒤 고르면 돼요." }),
+      el("p", { class: "hint", text: "아이폰 음성 메모는 '파일에 저장'한 뒤 고르거나, 아이폰 단축어로 바로 올릴 수 있어요." }),
       el(
         "div",
         { class: "manage-links" },
         el("a", { class: "manage-link", href: "#/voices" }, icon("voice"), "등록한 목소리 관리"),
         el("a", { class: "manage-link", href: "#/memory" }, icon("check"), "등록한 이름·표기 관리"),
+        el("a", { class: "manage-link", href: "#/shortcut" }, icon("phone"), "아이폰 단축어"),
       ),
     );
     if (jobs.some(isActive)) state.pollTimer = setTimeout(refresh, POLL_MS);

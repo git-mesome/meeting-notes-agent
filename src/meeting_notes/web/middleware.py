@@ -11,6 +11,9 @@ from meeting_notes.auth import SESSION_COOKIE
 READ_ONLY_METHODS = {"GET", "HEAD", "OPTIONS"}
 # 로그인하지 않아도 열리는 경로. 화면 파일과 로그인 과정만 연다.
 PUBLIC_PREFIXES = ("/auth/", "/static/")
+UPLOAD_PATH = "/api/jobs"
+# 단축어는 응답 본문을 그대로 보여 주므로 무엇을 하면 되는지 적는다.
+UPLOAD_KEY_NEEDED = "업로드 키가 없거나 맞지 않아요. 회의록 사이트의 '아이폰 단축어' 화면에서 키를 받아 단축어에 넣어 주세요."
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -28,7 +31,15 @@ def is_public(path):
     return path.startswith(PUBLIC_PREFIXES) or path == "/sw.js"
 
 
-def install(app, auth, allowed_hosts):
+def key_user(request, keys):
+    """아이폰 단축어는 로그인 대신 사람별 업로드 키를 보낸다(auth/upload_keys.py). 녹음 올리기에만 받는다."""
+    if request.method != "POST" or request.url.path != UPLOAD_PATH:
+        return None
+    scheme, _, key = request.headers.get("authorization", "").partition(" ")
+    return keys.user(key.strip()) if scheme.lower() == "bearer" else None
+
+
+def install(app, auth, allowed_hosts, keys):
     """허용한 Host만 받고, 다른 사이트의 쓰기 요청과 로그인하지 않은 요청을 막고, 보안 헤더를 붙인다."""
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
@@ -39,9 +50,11 @@ def install(app, auth, allowed_hosts):
         if request.method not in READ_ONLY_METHODS and origin and urlsplit(origin).netloc != request.headers.get("host"):
             return JSONResponse({"detail": "다른 사이트에서 보낸 요청은 처리하지 않아요."}, status_code=403)
         path = request.url.path
-        user = auth.user(request.cookies.get(SESSION_COOKIE)) if auth else None
+        user = (auth.user(request.cookies.get(SESSION_COOKIE)) or key_user(request, keys)) if auth else None
         if auth and user is None and not is_public(path):
-            if path.startswith("/api/"):
+            if path == UPLOAD_PATH and request.method == "POST":
+                response = JSONResponse({"detail": UPLOAD_KEY_NEEDED}, status_code=401)
+            elif path.startswith("/api/"):
                 response = JSONResponse({"detail": "로그인이 필요해요."}, status_code=401)
             else:
                 response = RedirectResponse(f"/auth/login?next={quote(path)}", status_code=303)

@@ -8,7 +8,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
-from meeting_notes.auth import OIDC, UserBook
+from meeting_notes.auth import OIDC, UploadKeys, UserBook
 from meeting_notes.issues.service import IssueService
 from meeting_notes.jobs.service import JobService
 from meeting_notes.memory import MemoryBook
@@ -25,6 +25,7 @@ class Services:
     push: PushCenter
     auth: OIDC | None
     users: UserBook
+    upload_keys: UploadKeys
 
 
 def services(request: Request) -> Services:
@@ -57,6 +58,10 @@ def user_book(request: Request) -> UserBook:
     return services(request).users
 
 
+def upload_keys(request: Request) -> UploadKeys:
+    return services(request).upload_keys
+
+
 def login(request: Request) -> OIDC | None:
     return services(request).auth
 
@@ -72,5 +77,6 @@ Voices = Annotated[VoiceBook, Depends(voice_book)]
 Memory = Annotated[MemoryBook, Depends(memory_book)]
 Push = Annotated[PushCenter, Depends(push_center)]
 Users = Annotated[UserBook, Depends(user_book)]
+Keys = Annotated[UploadKeys, Depends(upload_keys)]
 Auth = Annotated[OIDC | None, Depends(login)]
 User = Annotated[dict | None, Depends(current_user)]

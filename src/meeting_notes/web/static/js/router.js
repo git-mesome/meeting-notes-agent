@@ -4,6 +4,7 @@ import { renderList } from "./list.js";
 import { setScreen } from "./screen.js";
 import { el } from "./ui.js";
 import { renderMemory } from "./memory.js";
+import { renderShortcut } from "./shortcut.js";
 import { renderVoices } from "./voices.js";
 import { renderWaiting } from "./waiting.js";
 
@@ -24,6 +25,10 @@ export async function route() {
     }
     if (location.hash === "#/memory") {
       await renderMemory();
+      return;
+    }
+    if (location.hash === "#/shortcut") {
+      await renderShortcut();
       return;
     }
     if (!match) {

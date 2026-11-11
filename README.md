@@ -157,6 +157,13 @@ admin_subs = []                            # 모든 회의를 고치고 지우�
 - "참석자만 보기"를 켠 회의는 다른 사람의 목록과 검색에 나오지 않고, 주소로 열어도 찾을 수 없다고 나온다.
 - 로그인을 켜기 전에 올린 회의는 올린 사람이 없어 관리자만 고치고 관리한다. 관리자가 참석자를 정해 주면 그 사람도 고칠 수 있다.
 
+아이폰 단축어는 SSO 로그인을 할 수 없어서, 첫 화면의 "아이폰 단축어"에서 받은 업로드 키를 단축어의 `Authorization: Bearer <키>` 헤더에 넣는다(`auth/upload_keys.py`).
+
+- 키로 올린 회의는 키를 받은 사람이 올린 회의가 된다.
+- 키로는 녹음 올리기(`POST /api/jobs`)만 할 수 있고, 회의를 보거나 고칠 수는 없다.
+- 한 사람에 키는 하나다. 새로 받으면 이전 키는 쓸 수 없고, 지우면 그 키를 넣은 단축어로는 올릴 수 없다.
+- 키 원문은 받을 때 한 번만 보여 준다. 서버에는 SHA-256 값만 `jobs/upload-keys.json`에 남긴다.
+
 ### 핸드폰에서 접속
 
 서버는 `127.0.0.1`에 두고 [Tailscale](https://tailscale.com/)이 같은 tailnet의 기기에만 중계하게 한다.
@@ -166,7 +173,7 @@ tailscale serve --bg --http=80 http://127.0.0.1:8000     # 접속
 tailscale serve --bg --https=443 http://127.0.0.1:8000   # 웹 푸시용 HTTPS
 ```
 
-출력된 `http(s)://<기기 이름>.<tailnet>.ts.net/`을 연다. IP 주소로 접속하면 404가 난다. 아이폰에서 완료 알림을 받으려면 Safari에서 HTTPS 주소를 홈 화면에 추가하고, 추가한 앱에서 알림을 켠다. 음성 메모는 공유 메뉴의 단축어로 올린다(화면 안내 참고). 노트북이 꺼지거나 절전 상태이면 접속되지 않는다.
+출력된 `http(s)://<기기 이름>.<tailnet>.ts.net/`을 연다. IP 주소로 접속하면 404가 난다. 아이폰에서 완료 알림을 받으려면 Safari에서 HTTPS 주소를 홈 화면에 추가하고, 추가한 앱에서 알림을 켠다. 음성 메모는 공유 메뉴의 단축어로 올린다(첫 화면의 "아이폰 단축어" 안내 참고). 노트북이 꺼지거나 절전 상태이면 접속되지 않는다.
 
 ### 이슈 등록
 
@@ -285,7 +292,7 @@ src/meeting_notes/
 ├── pipeline/            audio → transcribe → turns → notes, process가 이어서 실행. documents는 회의 자료
 ├── speakers/            화자 이름, 목소리 특징, 목소리 등록과 대조
 ├── issues/              trackers(어댑터 규격), actions, drafting, service
-├── auth/                oidc(SSO 로그인), session(쿠키 서명), users(로그인한 적 있는 사람)
+├── auth/                oidc(SSO 로그인), session(쿠키 서명), users(로그인한 적 있는 사람), upload_keys(단축어용 키)
 └── notifications/       웹 푸시(VAPID)
 company.example/         회사 폴더 예시와 연습용 트래커
 scripts/                 push_all.sh(GitHub·GitLab에 올리기), deploy.sh(GitLab CI의 서버 배포)
@@ -312,16 +319,17 @@ tests/                   pytest, 화면 개발용 가짜 서버
 | `jobs/voices.json` | 등록한 목소리(권한 600) |
 | `jobs/memory.json` | 등록한 이름·표기(권한 600) |
 | `jobs/users.json` | 로그인한 적이 있는 사람의 sub와 이름(권한 600) |
+| `jobs/upload-keys.json` | 아이폰 단축어용 업로드 키의 SHA-256 값과 주인(권한 600) |
 | `jobs/push-key.pem`, `jobs/push-subscriptions.json` | 웹 푸시 키와 구독 정보 |
 | `jobs/session-key` | 로그인 쿠키 서명 키(권한 600) |
 
 ## HTTP API
 
-화면이 쓰는 API다. 로그인을 켜면 `/auth/*`와 화면 파일을 뺀 모든 요청에 로그인이 필요하고, 쓰기 요청은 같은 사이트에서 보낸 것만 받는다.
+화면이 쓰는 API다. 로그인을 켜면 `/auth/*`와 화면 파일을 뺀 모든 요청에 로그인이 필요하고, 쓰기 요청은 같은 사이트에서 보낸 것만 받는다. 녹음 업로드만 로그인 대신 업로드 키로도 받는다.
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| `POST` | `/api/jobs?template=` | 녹음 업로드. multipart 파일이나 요청 본문 그대로(단축어용). 최대 1GB |
+| `POST` | `/api/jobs?template=` | 녹음 업로드. multipart 파일이나 요청 본문 그대로(단축어용). 최대 1GB. 로그인을 켰으면 단축어는 `Authorization: Bearer <업로드 키>` |
 | `GET` | `/api/jobs` | 작업 목록과 대기 순서, 예상 시간 |
 | `GET` | `/api/jobs/{id}` | 작업 상세. 완료되면 회의록, 발언, 화자, 질문, 등록한 이슈를 함께 준다. |
 | `DELETE` | `/api/jobs/{id}` | 삭제 |
@@ -343,6 +351,7 @@ tests/                   pytest, 화면 개발용 가짜 서버
 | `GET` | `/api/search?q=` | 회의록, 전사문 검색 |
 | `GET` | `/api/templates`, `/api/tracker`, `/api/me` | 양식 목록, 트래커 연동 상태, 로그인한 사용자 |
 | `GET` | `/api/users` | 참석자로 고를 수 있는 사람(로그인한 적이 있는 사람) |
+| `GET`, `POST`, `DELETE` | `/api/upload-key` | 내 업로드 키를 받은 때, 새로 받기(원문은 이때만 준다), 지우기 |
 | `GET` | `/auth/login?next=`, `/auth/callback`, `/auth/logout` | SSO 로그인과 로그아웃 |
 | `GET`, `DELETE` | `/api/voices`, `/api/voices/{id}` | 등록한 목소리 목록, 삭제 |
 | `GET`, `POST` | `/api/push/key`, `/subscribe`, `/unsubscribe` | 웹 푸시 |
@@ -389,7 +398,6 @@ i7-1360P, `large-v3` int8, 8스레드 기준으로 음성 길이의 2.2~2.7배�
 ## 한계
 
 - 등록한 목소리, 이름·표기, 완료 알림은 아직 사람별로 나뉘지 않고 서버 전체에 하나다.
-- 로그인을 켜면 아이폰 단축어로 올릴 수 없다. 단축어는 SSO 로그인을 할 수 없기 때문이다.
 - CPU로 처리해 녹음 길이보다 두 배 이상 오래 걸리고, 그동안 노트북이 켜져 있어야 한다.
 - 마이크 하나로 녹음하므로 짧게 끼어든 말은 다른 화자의 발언에 섞일 수 있다.
 - 목소리 자동 인식 기준값(코사인 유사도 0.75)은 회의 하나로 정한 잠정값이다. 다른 장소와 날짜의 회의에서는 알아보지 못하거나 틀릴 수 있다.

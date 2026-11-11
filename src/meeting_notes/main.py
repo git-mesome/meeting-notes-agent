@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from meeting_notes import settings
-from meeting_notes.auth import UserBook
+from meeting_notes.auth import UploadKeys, UserBook
 from meeting_notes.errors import AppError
 from meeting_notes.issues.service import IssueService, link_issues
 from meeting_notes.jobs.service import JobService
@@ -78,6 +78,7 @@ def create_app(
     voices = VoiceBook(data_dir)
     memory = MemoryBook(data_dir)
     push_center = PushCenter(data_dir, send=push_send)
+    upload_keys = UploadKeys(data_dir)
     worker = Worker(store, process, voices, push_center)
     job_service = JobService(store, worker, voices, answer, issue_links=link_issues(tracker), memory=memory)
     services = Services(
@@ -88,6 +89,7 @@ def create_app(
         push=push_center,
         auth=auth,
         users=UserBook(data_dir),
+        upload_keys=upload_keys,
     )
 
     @asynccontextmanager
@@ -98,7 +100,7 @@ def create_app(
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.services = services
-    middleware.install(app, auth, company.allowed_hosts)
+    middleware.install(app, auth, company.allowed_hosts, upload_keys)
 
     @app.exception_handler(AppError)
     async def app_error(_request, error):

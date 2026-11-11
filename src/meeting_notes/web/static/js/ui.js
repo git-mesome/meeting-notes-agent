@@ -21,6 +21,7 @@ export const ICONS = {
   play: "M8 5l11 7-11 7z",
   stop: "M7 7h10v10H7z",
   alert: "M12 8v5m0 3.5h.01M12 3l9.5 17h-19z",
+  phone: "M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM11 18h2",
 };
 export const PLAY_ICON = "M7 4l13 8-13 8z";
 export const PAUSE_ICON = "M6 4h4v16H6zM14 4h4v16h-4z";

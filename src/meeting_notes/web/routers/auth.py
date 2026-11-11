@@ -1,4 +1,4 @@
-"""SSO 로그인과 로그아웃, 로그인한 적 있는 사람 목록. 로그인을 켜지 않았으면 첫 화면으로 보낸다."""
+"""SSO 로그인과 로그아웃, 로그인한 적 있는 사람 목록, 아이폰 단축어용 업로드 키. 로그인을 켜지 않았으면 첫 화면으로 보낸다."""
 
 import logging
 
@@ -6,7 +6,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 
 from meeting_notes.auth import FLOW_COOKIE, FLOW_SECONDS, SESSION_COOKIE, AuthError
-from meeting_notes.web.deps import Auth, User, Users
+from meeting_notes.errors import AppError
+from meeting_notes.web.deps import Auth, Keys, User, Users
 from meeting_notes.web.pages import login_page
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,27 @@ def me(auth: Auth, user: User):
 def users_list(users: Users, user: User):
     """회의 참석자로 고를 수 있는 사람. 로그인을 켜지 않았으면 고를 사람이 없다."""
     return users.list() if user else []
+
+
+@router.get("/api/upload-key")
+def upload_key(keys: Keys, user: User):
+    """아이폰 단축어용 키를 받은 때. 키 원문은 받을 때 한 번만 보여 준다(auth/upload_keys.py)."""
+    return {"created_at": keys.created_at(user["sub"]) if user else None}
+
+
+@router.post("/api/upload-key", status_code=201)
+def new_upload_key(keys: Keys, user: User):
+    """새 키를 만든다. 전에 받은 키는 더 이상 쓸 수 없다."""
+    if user is None:
+        raise AppError("로그인을 켜지 않아 키 없이 단축어로 올릴 수 있어요.")
+    return keys.issue(user)
+
+
+@router.delete("/api/upload-key")
+def delete_upload_key(keys: Keys, user: User):
+    if user:
+        keys.revoke(user["sub"])
+    return {"ok": True}
 
 
 @router.get("/auth/login")

@@ -358,3 +358,64 @@
   font-weight: 400;
   line-height: 1.4;
 }
+
+/* 아이폰 단축어 */
+.shortcut-card {
+  margin-bottom: 1rem;
+  padding: 1.1rem 1.1rem 1.2rem;
+}
+
+.shortcut-card h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.0625rem;
+}
+
+.shortcut-card > p {
+  margin: 0;
+  color: var(--sub);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.shortcut-card .meta {
+  margin-top: 0.6rem;
+}
+
+.shortcut-steps {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  line-height: 1.55;
+}
+
+.shortcut-steps li + li {
+  margin-top: 0.6rem;
+}
+
+.copy-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.copy-field .text-input {
+  min-height: 2.75rem;
+  margin-top: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8125rem;
+}
+
+.copy-field .button,
+.key-actions .button {
+  min-height: 2.75rem;
+  padding: 0.3rem 0.9rem;
+  border-radius: 12px;
+  font-size: 0.9375rem;
+}
+
+.key-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+}
