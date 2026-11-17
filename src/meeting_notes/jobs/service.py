@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from meeting_notes.errors import AppError, Conflict, NotFound, TooLarge, Upstream
@@ -24,7 +25,7 @@ from meeting_notes.pipeline.documents import (
     find_documents,
 )
 from meeting_notes.pipeline.notes import notes_title
-from meeting_notes.pipeline.recordings import add_recording
+from meeting_notes.pipeline.recordings import stage_recording
 from meeting_notes.pipeline.spelling import fix_spelling
 from meeting_notes.pipeline.templates import DEFAULT_TEMPLATE, TEMPLATES
 from meeting_notes.pipeline.turns import format_transcript
@@ -39,6 +40,8 @@ CHECK_ITEM = re.compile(r"^\s*[-*]\s+(?:\[[ xX]\]\s+)?")
 # 확인한 내용은 항목 뒤에 "— 확인: 내용"으로 붙인다.
 CHECK_NOTE = " — 확인: "
 TIME_REFS = re.compile(r"\s*\[\d{1,2}:\d{2}(?::\d{2})?\]")
+# 아이폰 '이어 올리기' 단축어는 이 시간 안에 올린 회의에만 녹음을 붙인다.
+APPEND_HOURS = 12
 # 자료는 회의록을 쓰기 직전에 읽는다. 그 뒤에 붙이거나 지운 자료는 다시 써야 반영된다.
 DOCUMENTS_READ_STATUSES = ("writing", "done")
 
@@ -233,36 +236,53 @@ class JobService:
         shutil.rmtree(self.store.path(job_id), ignore_errors=True)
 
     def recording_upload_path(self, job_id):
-        """회의에 더 올릴 녹음을 잠시 받아 둘 파일. 녹음으로 찾지 않는 확장자를 쓴다. 받기 전에 더 올릴 수 있는지 본다."""
-        self.require_addable(job_id)
+        """회의에 더 올릴 녹음을 잠시 받아 둘 파일. 녹음으로 찾지 않는 확장자를 쓴다."""
+        self.get(job_id, EDIT)
         return self.store.path(job_id) / f"upload-{uuid.uuid4().hex}.tmp"
 
-    def require_addable(self, job_id):
-        job = self.get(job_id, EDIT)
-        if job["status"] in ACTIVE_STATUSES:
-            raise Conflict("처리가 끝난 뒤에 녹음을 더 올릴 수 있어요.")
-        if self.worker.is_running(job_id):
-            raise Conflict(STILL_STOPPING_MESSAGE)
-        return job
+    def latest_job_id(self):
+        """아이폰 '이어 올리기' 단축어가 녹음을 붙일 회의: 요청한 사람이 마지막으로 올린 회의.
+
+        로그인을 끄면 누가 올렸든 마지막 회의다. 오래된 회의에 잘못 붙지 않도록 APPEND_HOURS 안에 올린 회의만 본다.
+        """
+        since = datetime.now(timezone.utc) - timedelta(hours=APPEND_HOURS)
+        for job in self.store.all():
+            if datetime.fromisoformat(job["created_at"]) < since:
+                break
+            owner = (job.get("owner") or {}).get("sub")
+            if self.viewer is None or (owner is not None and str(owner) == str(self.viewer["sub"])):
+                return job["id"]
+        raise NotFound(
+            f"이어 붙일 회의가 없어요. {APPEND_HOURS}시간 안에 올린 회의에만 이어 붙여요. "
+            "새 회의로 올리려면 처음 만든 단축어를 써 주세요."
+        )
 
     def add_recording(self, job_id, suffix, incoming):
         """회의 끝에 녹음을 하나 더 잇는다. 새 녹음만 전사하고 회의록은 다시 쓴다(pipeline/recordings.py).
 
+        처리하는 중이면 받아 두었다가 지금 처리가 끝난 뒤 이어서 처리한다(jobs/worker.py).
         앞 녹음의 화자 라벨은 그대로라 정해 둔 화자 이름도 그대로 둔다.
         """
-        # 받는 동안 처리가 시작됐을 수 있어 다시 본다.
-        job = self.require_addable(job_id)
+        self.get(job_id, EDIT)
         duration = probe_duration(incoming)
         job_dir = self.store.path(job_id)
-        add_recording(job_dir, suffix, incoming)
+        # 처리가 끝나는 것과 엇갈리면 받아 둔 녹음이 처리되지 않으므로, 처리하는 쪽과 같은 잠금 안에서 상태를 읽고 받아 둔다.
+        with self.worker.lock:
+            job = self.store.read(job_id)
+            active = job["status"] in ACTIVE_STATUSES
+            if not active and self.worker.current_job == job_id:
+                raise Conflict(STILL_STOPPING_MESSAGE)
+            stage_recording(job_dir, suffix, incoming)
+            self.store.update(job_id, duration_seconds=job["duration_seconds"] + duration)
+        if active:
+            return self.detail(job_id)
         if job["status"] == "done":
             shutil.copyfile(job_dir / "notes.md", job_dir / "notes.previous.md")
         (job_dir / "notes.draft.md").unlink(missing_ok=True)
         self.store.update(
             job_id,
             status="queued",
-            duration_seconds=job["duration_seconds"] + duration,
-            # 남은 시간은 새로 전사할 녹음 길이로 어림한다. 앞 녹음도 전사하지 못했으면 전체 길이로 어림한다.
+            # 회의록까지 만든 회의면 새 녹음만 전사한다. 처리를 시작하면 다시 어림한다.
             transcribe_seconds=duration if job["status"] == "done" else None,
             confirmed_at=None,
             error=None,

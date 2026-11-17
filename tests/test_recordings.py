@@ -8,13 +8,16 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
+from meeting_notes.auth import OIDC, SESSION_COOKIE, UserBook
 from meeting_notes.main import create_app
 from meeting_notes.pipeline.audio import probe_duration
 from meeting_notes.pipeline.recordings import merge_transcripts
 from meeting_notes.pipeline.turns import to_turns
 from meeting_notes.speakers.voices import VoiceBook
+from meeting_notes.web.middleware import UPLOAD_KEY_NEEDED
 from meeting_notes.web.routers import jobs as jobs_router
 from tests.test_app import client, tone, upload, wait_for  # noqa: F401
+from tests.test_upload_keys import OTHER, OWNER, SETTINGS, from_shortcut
 
 
 def segment(start, speaker, text):
@@ -42,7 +45,7 @@ def transcript_for(audio):
     return FIRST if audio.stem == "audio" else SECOND
 
 
-def make_site(tmp_path, gate=None):
+def make_site(tmp_path, gate=None, auth=None):
     """process는 process_audio처럼 전사가 없을 때만 전사하고, transcribe는 더 올린 녹음을 전사한다. 전사한 녹음 이름을 남긴다.
 
     gate를 넘기면 회의록을 쓰기 전에 gate가 열릴 때까지 기다린다.
@@ -65,7 +68,7 @@ def make_site(tmp_path, gate=None):
         (out_dir / "notes.md").write_text("# 회의록: 녹음 여럿\n", encoding="utf-8")
         return {"input_tokens": 1, "output_tokens": 1}
 
-    app = create_app(data_dir=tmp_path, process=process, transcribe=transcribe, tracker=None, auth=None)
+    app = create_app(data_dir=tmp_path, process=process, transcribe=transcribe, tracker=None, auth=auth)
     return TestClient(app, base_url="http://127.0.0.1"), transcribed
 
 
@@ -213,18 +216,103 @@ def test_added_recording_is_transcribed_alone_and_keeps_speaker_names(tmp_path, 
         assert transcribed == ["audio.m4a", "2.m4a", "3.m4a"]
 
 
-def test_adding_recording_is_refused_while_processing(tmp_path, tone):
+def test_recording_added_while_processing_is_processed_after(tmp_path, tone):
     gate = threading.Event()
-    site, _ = make_site(tmp_path, gate)
+    site, transcribed = make_site(tmp_path, gate)
     with site as client:
         job_id = upload(client, tone)
         wait_for(client, job_id, "writing")
-        refused = add(client, job_id, tone)
-        assert refused.status_code == 409
+        response = add(client, job_id, tone)
+        assert response.status_code == 200
+        assert response.json()["status"] == "writing"
         gate.set()
-        wait_for(client, job_id, "done")
-        assert not (tmp_path / job_id / "recordings").exists()
-        assert [path for path in (tmp_path / job_id).iterdir() if path.suffix == ".tmp"] == []
+        job = wait_for(client, job_id, "done")
+        # 앞 녹음을 다 처리한 뒤 새 녹음만 전사해 잇는다.
+        assert transcribed == ["audio.m4a", "2.m4a"]
+        assert [turn["speaker"] for turn in job["turns"]] == ["SPEAKER_00", "SPEAKER_01", "SPEAKER_02", "SPEAKER_01"]
+        assert job["duration_seconds"] == pytest.approx(2.0, abs=0.2)
+        assert not (tmp_path / job_id / "added").exists()
+
+
+def test_recording_added_before_processing_starts_is_transcribed_together(tmp_path, tone, silence):
+    gate = threading.Event()
+    site, transcribed = make_site(tmp_path, gate)
+    with site as client:
+        busy = upload(client, tone)
+        wait_for(client, busy, "writing")
+        # 앞 회의를 처리하는 동안 기다리는 회의에 녹음을 더 올린다.
+        waiting = upload(client, silence)
+        assert add(client, waiting, tone).status_code == 200
+        gate.set()
+        wait_for(client, waiting, "done")
+        assert transcribed == ["audio.m4a", "audio.m4a"]
+        job_dir = tmp_path / waiting
+        assert not (job_dir / "recordings").exists() and not (job_dir / "parts").exists()
+        assert probe_duration(job_dir / "audio.m4a") == pytest.approx(2.0, abs=0.2)
+        assert mean_volume(job_dir / "audio.m4a", 0.1, 0.7) < mean_volume(job_dir / "audio.m4a", 1.2, 0.7) - 30
+
+
+# 아이폰 '이어 올리기' 단축어
+
+
+def test_shortcut_adds_recording_to_latest_meeting(tmp_path, tone):
+    site, transcribed = make_site(tmp_path)
+    with site as client:
+        missing = from_shortcut_latest(client, tone)
+        assert missing.status_code == 404 and "이어 붙일 회의가 없어요" in missing.json()["detail"]
+
+        first = wait_for(client, upload(client, tone), "done")["id"]
+        latest = wait_for(client, upload(client, tone), "done")["id"]
+        response = from_shortcut_latest(client, tone)
+        assert response.status_code == 200 and response.json()["id"] == latest
+        wait_for(client, latest, "done")
+        assert (tmp_path / latest / "recordings" / "2.m4a").exists()
+        assert not (tmp_path / first / "recordings").exists()
+
+        # 12시간 넘게 지난 회의에는 붙이지 않는다.
+        for job_id in (first, latest):
+            meta = tmp_path / job_id / "meta.json"
+            job = json.loads(meta.read_text(encoding="utf-8"))
+            job["created_at"] = "2026-01-01T00:00:00+00:00"
+            meta.write_text(json.dumps(job), encoding="utf-8")
+        assert from_shortcut_latest(client, tone).status_code == 404
+
+
+def from_shortcut_latest(client, tone, key=None):
+    headers = {"Content-Type": "audio/x-m4a"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    return client.post("/api/jobs/latest/recordings", content=tone, headers=headers)
+
+
+def test_shortcut_adds_to_key_owners_latest_meeting(tmp_path, tone):
+    oidc = OIDC(SETTINGS, tmp_path)
+    for person in (OWNER, OTHER):
+        UserBook(tmp_path).seen(person)
+    site, _ = make_site(tmp_path, auth=oidc)
+    with site as client:
+
+        def act_as(user=None):
+            client.cookies.clear()
+            if user:
+                client.cookies.set(SESSION_COOKIE, oidc.session(user))
+            return client
+
+        key = act_as(OWNER).post("/api/upload-key").json()["key"]
+        mine = from_shortcut(act_as(), tone, key).json()["id"]
+        wait_for(act_as(OWNER), mine, "done")
+        # 다른 사람이 나중에 올린 회의가 있어도 키를 받은 사람의 마지막 회의에 붙인다.
+        wait_for(act_as(OTHER), upload(act_as(OTHER), tone), "done")
+
+        refused = from_shortcut_latest(act_as(), tone)
+        assert refused.status_code == 401 and refused.json()["detail"] == UPLOAD_KEY_NEEDED
+        response = from_shortcut_latest(act_as(), tone, key)
+        assert response.status_code == 200 and response.json()["id"] == mine
+        # 키로는 회의를 골라 붙일 수 없다.
+        headers = {"Authorization": f"Bearer {key}"}
+        assert act_as().post(f"/api/jobs/{mine}/recordings", files={"file": ("a.m4a", tone)}, headers=headers).status_code == 401
+        wait_for(act_as(OWNER), mine, "done")
+        assert (tmp_path / mine / "recordings" / "2.m4a").exists()
 
 
 def test_recordings_per_meeting_are_limited(tmp_path, tone):

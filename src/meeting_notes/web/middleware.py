@@ -11,7 +11,8 @@ from meeting_notes.auth import SESSION_COOKIE
 READ_ONLY_METHODS = {"GET", "HEAD", "OPTIONS"}
 # 로그인하지 않아도 열리는 경로. 화면 파일과 로그인 과정만 연다.
 PUBLIC_PREFIXES = ("/auth/", "/static/")
-UPLOAD_PATH = "/api/jobs"
+# 업로드 키로 받는 경로: 새 회의 올리기와 마지막 회의에 이어 올리기.
+UPLOAD_PATHS = ("/api/jobs", "/api/jobs/latest/recordings")
 # 단축어는 응답 본문을 그대로 보여 주므로 무엇을 하면 되는지 적는다.
 UPLOAD_KEY_NEEDED = "업로드 키가 없거나 맞지 않아요. 회의록 사이트의 '아이폰 단축어' 화면에서 키를 받아 단축어에 넣어 주세요."
 
@@ -33,7 +34,7 @@ def is_public(path):
 
 def key_user(request, keys):
     """아이폰 단축어는 로그인 대신 사람별 업로드 키를 보낸다(auth/upload_keys.py). 녹음 올리기에만 받는다."""
-    if request.method != "POST" or request.url.path != UPLOAD_PATH:
+    if request.method != "POST" or request.url.path not in UPLOAD_PATHS:
         return None
     scheme, _, key = request.headers.get("authorization", "").partition(" ")
     return keys.user(key.strip()) if scheme.lower() == "bearer" else None
@@ -52,7 +53,7 @@ def install(app, auth, allowed_hosts, keys):
         path = request.url.path
         user = (auth.user(request.cookies.get(SESSION_COOKIE)) or key_user(request, keys)) if auth else None
         if auth and user is None and not is_public(path):
-            if path == UPLOAD_PATH and request.method == "POST":
+            if path in UPLOAD_PATHS and request.method == "POST":
                 response = JSONResponse({"detail": UPLOAD_KEY_NEEDED}, status_code=401)
             elif path.startswith("/api/"):
                 response = JSONResponse({"detail": "로그인이 필요해요."}, status_code=401)

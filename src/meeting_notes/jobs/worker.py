@@ -8,7 +8,7 @@ import threading
 from meeting_notes.jobs.store import now
 from meeting_notes.pipeline.audio import find_audio, find_parts, join_parts
 from meeting_notes.pipeline.notes import notes_title
-from meeting_notes.pipeline.recordings import merge_recordings, needs_merge
+from meeting_notes.pipeline.recordings import find_added, merge_recordings, needs_merge, take_added, untranscribed_seconds
 from meeting_notes.speakers.embeddings import extract_embeddings
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,12 @@ class Worker(threading.Thread):
         try:
             # 처리하면 전사문을 새로 쓰므로 그 전에 있던 화자를 적어 둔다.
             before = spoken_labels(job_dir)
+            # 더 올린 녹음을 받아 두는 일(jobs/service.py)과 엇갈리지 않게 잠그고 꺼낸다.
+            with self.lock:
+                if find_added(job_dir):
+                    take_added(job_dir)
+            # 남은 시간은 새로 전사할 녹음 길이로 어림한다. 녹음 전체를 전사하면 전체 길이로 어림한다.
+            self.store.update(job_id, transcribe_seconds=untranscribed_seconds(job_dir) if needs_merge(job_dir) else None)
             # 한 번에 올린 녹음은 잇는 것부터, 더 올린 녹음은 새 녹음 전사부터 전사 단계로 보여 준다.
             if find_parts(job_dir):
                 on_stage("transcribing")
@@ -86,9 +92,19 @@ class Worker(threading.Thread):
                 job = self.store.read(job_id)
                 if job["status"] == "canceled":
                     return
+                # 처리하는 동안 녹음을 더 올렸으면 알리지 않고 이어서 처리한다.
+                more = bool(find_added(job_dir))
                 self.store.update(
-                    job_id, status="done", title=notes_title(notes, job["name"]), usage=usage, error=None, **recognized
+                    job_id,
+                    status="queued" if more else "done",
+                    title=notes_title(notes, job["name"]),
+                    usage=usage,
+                    error=None,
+                    **recognized,
                 )
+                if more:
+                    self.queue.put(job_id)
+                    return
             self.notify("회의록이 완성됐어요", "눌러서 확인해 보세요", job_id)
         except Exception as error:
             with self.lock:

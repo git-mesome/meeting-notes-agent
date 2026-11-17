@@ -55,6 +55,22 @@ def copy_upload(source, target, limit=None, message=TOO_LARGE_MESSAGE):
     return copied
 
 
+async def save_body(request, target):
+    """아이폰 단축어가 파일 이름 없이 요청 본문으로 보낸 녹음을 받는다. 확장자는 Content-Type으로 정한다."""
+    copied = 0
+    with open(target, "wb") as out:
+        async for chunk in request.stream():
+            copied += len(chunk)
+            if copied > MAX_UPLOAD_BYTES:
+                raise TooLarge(TOO_LARGE_MESSAGE)
+            out.write(chunk)
+    return RAW_SUFFIXES.get(content_type(request), ".m4a")
+
+
+def content_type(request):
+    return request.headers.get("content-type", "").split(";")[0].strip().lower()
+
+
 @router.get("/templates")
 def list_templates():
     return [
@@ -74,13 +90,12 @@ async def create_job(request: Request, jobs: Jobs, user: User):
 
     양식에 녹음을 여럿 담으면 담은 순서대로 이어 회의 하나로 만든다. 1GB는 모두 합친 크기다.
     """
-    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     template = request.query_params.get("template", DEFAULT_TEMPLATE)
     require_template(template)
     job_id, job_dir = jobs.new_job_dir()
     uploads = []
     try:
-        if content_type == "multipart/form-data":
+        if content_type(request) == "multipart/form-data":
             async with request.form() as form:
                 files = [value for _, value in form.multi_items() if isinstance(value, UploadFile)]
                 if not files:
@@ -96,21 +111,14 @@ async def create_job(request: Request, jobs: Jobs, user: User):
                     uploads.append((suffix, incoming))
                 name = names[0] if len(names) == 1 else f"{names[0]} 외 {len(names) - 1}개"
         else:
-            suffix = RAW_SUFFIXES.get(content_type, ".m4a")
-            name = f"아이폰 녹음{suffix}"
             incoming = job_dir / "upload.tmp"
-            copied = 0
-            with open(incoming, "wb") as out:
-                async for chunk in request.stream():
-                    copied += len(chunk)
-                    if copied > MAX_UPLOAD_BYTES:
-                        raise TooLarge(TOO_LARGE_MESSAGE)
-                    out.write(chunk)
+            suffix = await save_body(request, incoming)
+            name = f"아이폰 녹음{suffix}"
             uploads.append((suffix, incoming))
         owner = {"sub": user["sub"], "name": user["name"]} if user else None
         return await run_in_threadpool(jobs.add, job_id, name, uploads, template, owner)
     except Exception:
-        logger.warning("업로드를 거절했다: content_type=%s", content_type)
+        logger.warning("업로드를 거절했다: content_type=%s", content_type(request))
         jobs.discard(job_id)
         raise
 
@@ -120,17 +128,32 @@ def read_job(job_id: str, jobs: Jobs):
     return jobs.detail(job_id)
 
 
+# 아래의 {job_id}보다 먼저 둬야 latest를 회의 번호로 읽지 않는다.
+@router.post("/jobs/latest/recordings")
+async def add_recording_to_latest(request: Request, jobs: Jobs):
+    """아이폰 '이어 올리기' 단축어. 마지막으로 올린 회의 뒤에 녹음을 붙인다."""
+    return await receive_recording(request, jobs, jobs.latest_job_id())
+
+
 @router.post("/jobs/{job_id}/recordings")
 async def add_recording(job_id: str, request: Request, jobs: Jobs):
-    """회의 끝에 녹음을 하나 더 잇는다. 새 녹음만 전사하고 회의록은 다시 쓴다."""
+    """회의 끝에 녹음을 하나 더 잇는다. 새 녹음만 전사하고 회의록은 다시 쓴다. 처리하는 중이면 끝난 뒤 이어서 처리한다."""
+    return await receive_recording(request, jobs, job_id)
+
+
+async def receive_recording(request, jobs, job_id):
+    """웹 화면은 양식으로, 아이폰 단축어는 요청 본문 그대로 보낸다."""
     incoming = jobs.recording_upload_path(job_id)
     try:
-        async with request.form() as form:
-            upload = next((value for value in form.values() if isinstance(value, UploadFile)), None)
-            if upload is None:
-                raise AppError("파일이 들어 있지 않아요. 녹음 파일을 올려 주세요.")
-            suffix = audio_suffix(Path(upload.filename or "녹음").name)
-            await run_in_threadpool(copy_upload, upload.file, incoming)
+        if content_type(request) == "multipart/form-data":
+            async with request.form() as form:
+                upload = next((value for value in form.values() if isinstance(value, UploadFile)), None)
+                if upload is None:
+                    raise AppError("파일이 들어 있지 않아요. 녹음 파일을 올려 주세요.")
+                suffix = audio_suffix(Path(upload.filename or "녹음").name)
+                await run_in_threadpool(copy_upload, upload.file, incoming)
+        else:
+            suffix = await save_body(request, incoming)
         return await run_in_threadpool(jobs.add_recording, job_id, suffix, incoming)
     finally:
         incoming.unlink(missing_ok=True)

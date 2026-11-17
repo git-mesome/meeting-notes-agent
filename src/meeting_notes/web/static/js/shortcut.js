@@ -107,6 +107,27 @@ export async function renderShortcut(fresh = null) {
     // append는 null을 "null" 글자로 넣으므로 빼고 넘긴다.
     ...[me.login ? keyCard(createdAt, fresh) : null].filter(Boolean),
     el("section", { class: "card shortcut-card" }, el("h2", { text: "단축어 만들기" }), el("ol", { class: "shortcut-steps" }, ...steps)),
+    // 마지막 회의에 이어 올리기(jobs/service.py의 latest_job_id).
+    el(
+      "section",
+      { class: "card shortcut-card" },
+      el("h2", { text: "이어 올리는 단축어" }),
+      el("p", {
+        text: `녹음이 나뉘었을 때 써요. 새 회의를 만들지 않고 ${me.login ? "내가 " : ""}12시간 안에 마지막으로 올린 회의 뒤에 붙여요. 앞 녹음을 처리하는 중이어도 괜찮아요.`,
+      }),
+      el(
+        "ol",
+        { class: "shortcut-steps" },
+        el("li", { text: "위에서 만든 단축어를 길게 눌러 복제하고, 이름을 '회의록에 이어 올리기'로 바꿔요." }),
+        el(
+          "li",
+          {},
+          "복제한 단축어의 URL을 아래 주소로 바꿔요.",
+          copyField(`${location.origin}/api/jobs/latest/recordings`, "이어 올릴 주소"),
+        ),
+        el("li", { text: "녹음을 공유할 때 새 회의면 처음 단축어를, 이어지는 녹음이면 이 단축어를 골라요." }),
+      ),
+    ),
     el("p", { class: "hint", text: "회의 종류는 '일반 회의'로 올라가요. 회의록을 연 뒤 더보기에서 다른 양식으로 다시 쓸 수 있어요." }),
   );
 }
