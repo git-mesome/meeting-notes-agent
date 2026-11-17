@@ -16,7 +16,8 @@ def public_job(job, ahead=0):
     }
     view["private"] = bool(job.get("private"))
     view["ahead"] = ahead
-    view["estimated_seconds"] = job["duration_seconds"] * SECONDS_PER_AUDIO_SECOND
+    # 회의에 녹음을 더 올렸으면 새 녹음만 전사한다(pipeline/recordings.py).
+    view["estimated_seconds"] = (job.get("transcribe_seconds") or job["duration_seconds"]) * SECONDS_PER_AUDIO_SECOND
     view["elapsed_seconds"] = None
     if job["status"] == "transcribing":
         started = datetime.fromisoformat(job["stage_started_at"])

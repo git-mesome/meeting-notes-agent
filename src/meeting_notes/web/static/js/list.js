@@ -1,11 +1,11 @@
 /* 첫 화면: 녹음 올리기, 양식 고르기, 검색, 회의 목록. */
 
-import { api, goToLogin, loadTemplates } from "./api.js";
+import { api, loadTemplates, uploadFiles } from "./api.js";
 import { badge, clock, dateText, detailText, displayName, headline, isActive, isWorking, metaText, progress, spanOfTime } from "./format.js";
 import { pushCard } from "./push.js";
 import { setScreen } from "./screen.js";
-import { ACCEPT, POLL_MS, state } from "./state.js";
-import { el, icon, meter, toast } from "./ui.js";
+import { ACCEPT, MAX_RECORDINGS, POLL_MS, state } from "./state.js";
+import { button, el, icon, meter, openSheet, toast } from "./ui.js";
 
 /* 목록 */
 
@@ -33,15 +33,71 @@ export function templateChips(templates) {
   );
 }
 
+/* 녹음을 여럿 고르면 이을 순서를 확인받는다. 이름 순서로 놓고 위로 올려 바꾼다. 취소하면 null. */
+function orderSheet(files) {
+  const stem = (file) => file.name.replace(/\.[^.]+$/, "");
+  const order = [...files].sort((a, b) => stem(a).localeCompare(stem(b), "ko", { numeric: true }));
+  const list = el("ol", { class: "note-list document-list" });
+  const render = () =>
+    list.replaceChildren(
+      ...order.map((file, index) =>
+        el(
+          "li",
+          { class: "voice-row" },
+          el("span", { class: "document-text" }, el("span", { class: "note-title", text: `${index + 1}. ${file.name}` })),
+          index
+            ? button("위로", {
+                onclick: () => {
+                  [order[index - 1], order[index]] = [order[index], order[index - 1]];
+                  render();
+                },
+              })
+            : null,
+        ),
+      ),
+    );
+  render();
+  return new Promise((resolve) => {
+    let result = null;
+    const sheet = openSheet((close) => [
+      el("h2", { text: `녹음 ${files.length}개로 회의록 하나를 만들까요?` }),
+      el("p", { text: "이 순서대로 이어서 글로 옮겨요. 순서가 다르면 바꿔 주세요." }),
+      list,
+      el(
+        "div",
+        { class: "sheet-actions" },
+        button("취소", { onclick: close }),
+        button("올리기", {
+          variant: "primary",
+          onclick: () => {
+            result = order;
+            close();
+          },
+        }),
+      ),
+    ]);
+    sheet.addEventListener("close", () => resolve(result));
+  });
+}
+
 export function uploadSection(onUploaded) {
   const meterBox = el("div", { class: "upload-meter" });
-  const input = el("input", { type: "file", accept: ACCEPT, id: "audio-file" });
+  const input = el("input", { type: "file", accept: ACCEPT, multiple: true, id: "audio-file" });
   const labelText = el("span", { text: "녹음 올리기" });
   const label = el("label", { class: "upload-button", for: "audio-file" }, icon("upload"), labelText);
 
-  input.addEventListener("change", () => {
-    const file = input.files[0];
-    if (!file) return;
+  input.addEventListener("change", async () => {
+    let files = [...input.files];
+    if (files.length > MAX_RECORDINGS) {
+      toast(`녹음은 한 회의에 ${MAX_RECORDINGS}개까지 올릴 수 있어요.`, true);
+      files = [];
+    } else if (files.length > 1) {
+      files = (await orderSheet(files)) || [];
+    }
+    if (!files.length) {
+      input.value = "";
+      return;
+    }
     input.disabled = true;
     label.setAttribute("aria-disabled", "true");
     labelText.textContent = "올리는 중";
@@ -49,42 +105,23 @@ export function uploadSection(onUploaded) {
     fill.style.width = "0%";
     meterBox.replaceChildren(el("div", { class: "meter" }, fill));
 
-    const finish = () => {
+    try {
+      await uploadFiles(`/api/jobs?template=${encodeURIComponent(state.selectedTemplate)}`, files, (fraction) => {
+        const percent = Math.round(fraction * 100);
+        fill.style.width = `${percent}%`;
+        labelText.textContent = percent < 100 ? `올리는 중 ${percent}%` : "파일을 확인하는 중";
+      });
+      toast("올렸어요. 다 되면 여기에 나타나요");
+      onUploaded();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
       input.disabled = false;
       input.value = "";
       label.removeAttribute("aria-disabled");
       labelText.textContent = "녹음 올리기";
       meterBox.replaceChildren();
-    };
-
-    const request = new XMLHttpRequest();
-    request.open("POST", `/api/jobs?template=${encodeURIComponent(state.selectedTemplate)}`);
-    request.responseType = "json";
-    request.upload.addEventListener("progress", (event) => {
-      if (!event.lengthComputable) return;
-      const percent = Math.round((event.loaded / event.total) * 100);
-      fill.style.width = `${percent}%`;
-      labelText.textContent = percent < 100 ? `올리는 중 ${percent}%` : "파일을 확인하는 중";
-    });
-    request.addEventListener("load", () => {
-      finish();
-      if (request.status === 401) {
-        goToLogin();
-      } else if (request.status === 201) {
-        toast("올렸어요. 다 되면 여기에 나타나요");
-        onUploaded();
-      } else {
-        const detail = request.response && request.response.detail;
-        toast(typeof detail === "string" ? detail : "파일을 올리지 못했어요. 다시 시도해 주세요.", true);
-      }
-    });
-    request.addEventListener("error", () => {
-      finish();
-      toast("연결이 끊겼어요. 노트북이 켜져 있는지 확인해 주세요.", true);
-    });
-    const form = new FormData();
-    form.append("file", file);
-    request.send(form);
+    }
   });
 
   return el("div", { class: "upload" }, input, el("div", { class: "upload-bar" }, meterBox, label));
@@ -229,7 +266,12 @@ export async function renderList() {
           ? el("ul", { class: "note-list" }, ...ordered.map(noteRow))
           : el("p", { class: "empty", text: "아직 회의록이 없어요. 첫 녹음을 올려 보세요." }),
       ),
-      el("p", { class: "hint", text: "아이폰 음성 메모는 '파일에 저장'한 뒤 고르거나, 아이폰 단축어로 바로 올릴 수 있어요." }),
+      el("p", {
+        class: "hint",
+        text:
+          "아이폰 음성 메모는 '파일에 저장'한 뒤 고르거나, 아이폰 단축어로 바로 올릴 수 있어요. " +
+          "녹음이 여러 개로 나뉘었으면 함께 고르거나, 회의록 더보기에서 나중에 더 올려요.",
+      }),
       el(
         "div",
         { class: "manage-links" },

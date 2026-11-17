@@ -9,6 +9,7 @@ import time
 
 from meeting_notes.issues import Tracker
 from meeting_notes.main import create_app
+from meeting_notes.pipeline.turns import to_turns
 
 SAMPLE_NOTES = """# 회의록: 3분기 방화벽 교체 일정 점검
 
@@ -45,6 +46,20 @@ SAMPLE_TURNS = [
 
 
 SAMPLE_EMBEDDINGS = {"SPEAKER_00": [1.0, 0.0, 0.0], "SPEAKER_01": [0.0, 1.0, 0.0], "SPEAKER_02": [0.0, 0.0, 1.0]}
+SAMPLE_TRANSCRIPT = {"segments": SAMPLE_TURNS, "speaker_embeddings": SAMPLE_EMBEDDINGS}
+# 더 올린 녹음. SPEAKER_00은 앞 녹음의 SPEAKER_01과 목소리가 같고, SPEAKER_01은 처음 나온 사람이다.
+ADDED_TRANSCRIPT = {
+    "segments": [
+        {"start": 2.0, "end": 20.0, "speaker": "SPEAKER_00", "text": "이어서 장비 목록을 확인했는데 모델명은 맞습니다."},
+        {"start": 22.0, "end": 40.0, "speaker": "SPEAKER_01", "text": "야간 작업 인력은 저희 팀에서 두 명 지원하겠습니다."},
+    ],
+    "speaker_embeddings": {"SPEAKER_00": [0.05, 1.0, 0.0], "SPEAKER_01": [0.5, 0.5, -0.7]},
+}
+
+
+def fake_transcribe(audio, out_dir, _on_process):
+    time.sleep(stage_seconds())
+    (out_dir / f"{audio.stem}.json").write_text(json.dumps(ADDED_TRANSCRIPT, ensure_ascii=False), encoding="utf-8")
 
 
 def fake_answer(_transcript, _notes, question, facts=()):
@@ -52,12 +67,20 @@ def fake_answer(_transcript, _notes, question, facts=()):
     return f"'{question}'에 대한 예시 답변이에요. 본사부터 교체하기로 했어요. [00:12] [01:05]"
 
 
+def stage_seconds():
+    return float(os.environ.get("FAKE_STAGE_SECONDS", "15"))
+
+
 def fake_process(_audio, out_dir, on_stage, _on_process):
-    delay = float(os.environ.get("FAKE_STAGE_SECONDS", "15"))
-    on_stage("transcribing")
-    time.sleep(delay)
-    (out_dir / "turns.json").write_text(json.dumps(SAMPLE_TURNS, ensure_ascii=False), encoding="utf-8")
-    (out_dir / "audio.json").write_text(json.dumps({"speaker_embeddings": SAMPLE_EMBEDDINGS}), encoding="utf-8")
+    """process_audio처럼 전사가 없을 때만 전사한다. 녹음을 더 올렸으면 이어 만든 전사가 있다."""
+    delay = stage_seconds()
+    transcript = out_dir / "audio.json"
+    if not transcript.exists():
+        on_stage("transcribing")
+        time.sleep(delay)
+        transcript.write_text(json.dumps(SAMPLE_TRANSCRIPT, ensure_ascii=False), encoding="utf-8")
+    turns = to_turns(json.loads(transcript.read_text(encoding="utf-8"))["segments"])
+    (out_dir / "turns.json").write_text(json.dumps(turns, ensure_ascii=False), encoding="utf-8")
     on_stage("writing")
     time.sleep(delay / 3)
     (out_dir / "notes.md").write_text(SAMPLE_NOTES, encoding="utf-8")
@@ -111,6 +134,7 @@ def create():
     return create_app(
         data_dir=os.environ.get("FAKE_DATA_DIR", "jobs-fake"),
         process=fake_process,
+        transcribe=fake_transcribe,
         answer=fake_answer,
         tracker=FakeTracker(),
         draft=fake_draft,

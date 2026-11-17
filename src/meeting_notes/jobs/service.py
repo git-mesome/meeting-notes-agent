@@ -15,7 +15,7 @@ from meeting_notes.jobs.search import plain_text, search_pattern, snippet
 from meeting_notes.jobs.share import render_share_html
 from meeting_notes.jobs.store import ACTIVE_STATUSES, now
 from meeting_notes.jobs.views import public_jobs
-from meeting_notes.pipeline.audio import find_audio, probe_duration
+from meeting_notes.pipeline.audio import PARTS_DIR, find_audio, probe_duration
 from meeting_notes.pipeline.documents import (
     DOCUMENT_TYPES,
     DOCUMENTS_DIR,
@@ -24,6 +24,7 @@ from meeting_notes.pipeline.documents import (
     find_documents,
 )
 from meeting_notes.pipeline.notes import notes_title
+from meeting_notes.pipeline.recordings import add_recording
 from meeting_notes.pipeline.spelling import fix_spelling
 from meeting_notes.pipeline.templates import DEFAULT_TEMPLATE, TEMPLATES
 from meeting_notes.pipeline.turns import format_transcript
@@ -197,11 +198,20 @@ class JobService:
         job_dir.mkdir()
         return job_id, job_dir
 
-    def add(self, job_id, name, suffix, incoming, template, owner):
-        """올라온 파일이 오디오인지 확인하고 처리 대기열에 넣는다."""
-        audio = incoming.with_name(f"audio{suffix}")
-        os.replace(incoming, audio)
-        duration = probe_duration(audio)
+    def add(self, job_id, name, uploads, template, owner):
+        """올라온 파일이 오디오인지 확인하고 처리 대기열에 넣는다.
+
+        uploads는 (확장자, 받아 둔 파일)을 이을 순서대로 담는다. 여럿이면 처리를 시작할 때 하나로 잇는다(pipeline/audio.py).
+        """
+        job_dir = self.store.path(job_id)
+        if len(uploads) == 1:
+            targets = [job_dir / f"audio{uploads[0][0]}"]
+        else:
+            (job_dir / PARTS_DIR).mkdir()
+            targets = [job_dir / PARTS_DIR / f"{number}{suffix}" for number, (suffix, _) in enumerate(uploads, 1)]
+        for (_, incoming), target in zip(uploads, targets):
+            os.replace(incoming, target)
+        duration = sum(probe_duration(target) for target in targets)
         self.store.write(
             {
                 "id": job_id,
@@ -221,6 +231,45 @@ class JobService:
 
     def discard(self, job_id):
         shutil.rmtree(self.store.path(job_id), ignore_errors=True)
+
+    def recording_upload_path(self, job_id):
+        """회의에 더 올릴 녹음을 잠시 받아 둘 파일. 녹음으로 찾지 않는 확장자를 쓴다. 받기 전에 더 올릴 수 있는지 본다."""
+        self.require_addable(job_id)
+        return self.store.path(job_id) / f"upload-{uuid.uuid4().hex}.tmp"
+
+    def require_addable(self, job_id):
+        job = self.get(job_id, EDIT)
+        if job["status"] in ACTIVE_STATUSES:
+            raise Conflict("처리가 끝난 뒤에 녹음을 더 올릴 수 있어요.")
+        if self.worker.is_running(job_id):
+            raise Conflict(STILL_STOPPING_MESSAGE)
+        return job
+
+    def add_recording(self, job_id, suffix, incoming):
+        """회의 끝에 녹음을 하나 더 잇는다. 새 녹음만 전사하고 회의록은 다시 쓴다(pipeline/recordings.py).
+
+        앞 녹음의 화자 라벨은 그대로라 정해 둔 화자 이름도 그대로 둔다.
+        """
+        # 받는 동안 처리가 시작됐을 수 있어 다시 본다.
+        job = self.require_addable(job_id)
+        duration = probe_duration(incoming)
+        job_dir = self.store.path(job_id)
+        add_recording(job_dir, suffix, incoming)
+        if job["status"] == "done":
+            shutil.copyfile(job_dir / "notes.md", job_dir / "notes.previous.md")
+        (job_dir / "notes.draft.md").unlink(missing_ok=True)
+        self.store.update(
+            job_id,
+            status="queued",
+            duration_seconds=job["duration_seconds"] + duration,
+            # 남은 시간은 새로 전사할 녹음 길이로 어림한다. 앞 녹음도 전사하지 못했으면 전체 길이로 어림한다.
+            transcribe_seconds=duration if job["status"] == "done" else None,
+            confirmed_at=None,
+            error=None,
+            documents_pending=False,
+        )
+        self.worker.queue.put(job_id)
+        return self.detail(job_id)
 
     # 회의 자료
 

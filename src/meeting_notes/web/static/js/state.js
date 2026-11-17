@@ -3,6 +3,7 @@
 export const root = document.getElementById("app");
 export const POLL_MS = 5000;
 export const ACCEPT = ".m4a,.mp3,.wav,.flac,.ogg,.aac,.mp4,.webm,audio/*";
+export const MAX_RECORDINGS = 5; // 한 회의에 올릴 수 있는 녹음 수(pipeline/audio.py)
 export const TIME_REF = /\[(\d{1,2}:\d{2}(?::\d{2})?)\]/;
 export const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 

@@ -3,6 +3,7 @@
 import { api, jsonOptions, loadTemplates } from "./api.js";
 import { route } from "./router.js";
 import { renderEditor } from "./notes.js";
+import { pickRecording } from "./recordings.js";
 import { deleteJob } from "./screen.js";
 import { confirmSheet, el, icon, openSheet, toast } from "./ui.js";
 
@@ -70,6 +71,7 @@ export function openMoreMenu(job, { onDocuments, onPeople }) {
         "div",
         { class: "sheet-menu" },
         can.edit ? item("rewrite", "다른 양식으로 다시 쓰기", then(() => openTemplateMenu(job))) : null,
+        can.edit ? item("voice", "녹음 더 올리기", then(() => pickRecording(job))) : null,
         can.edit || job.documents.length
           ? item("upload", can.edit ? "회의 자료 붙이기" : "회의 자료 보기", then(onDocuments))
           : null,

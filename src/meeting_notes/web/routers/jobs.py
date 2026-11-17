@@ -1,4 +1,4 @@
-"""회의 올리기와 처리 상태, 참석자와 공개 범위, 회의 자료 붙이기."""
+"""회의 올리기와 녹음 더 올리기, 처리 상태, 참석자와 공개 범위, 회의 자료 붙이기."""
 
 import logging
 from pathlib import Path
@@ -10,7 +10,7 @@ from starlette.datastructures import UploadFile
 
 from meeting_notes.errors import AppError, TooLarge
 from meeting_notes.jobs.service import require_template
-from meeting_notes.pipeline.audio import ALLOWED_SUFFIXES
+from meeting_notes.pipeline.audio import ALLOWED_SUFFIXES, MAX_RECORDINGS
 from meeting_notes.pipeline.documents import MAX_DOCUMENTS_BYTES
 from meeting_notes.pipeline.templates import DEFAULT_TEMPLATE, TEMPLATES
 from meeting_notes.web.deps import Jobs, User, Users
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 MAX_UPLOAD_BYTES = 1024**3
-TOO_LARGE_MESSAGE = "파일이 너무 커요. 1GB 이하로 올려 주세요."
+TOO_LARGE_MESSAGE = "파일이 너무 커요. 한 번에 1GB 이하로 올려 주세요."
 # 아이폰 단축어는 파일 이름 없이 본문으로 올린다. 내용은 ffprobe로 따로 확인한다.
 RAW_SUFFIXES = {
     "audio/mpeg": ".mp3",
@@ -34,8 +34,17 @@ RAW_SUFFIXES = {
 }
 
 
+def audio_suffix(name):
+    suffix = Path(name).suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        allowed = ", ".join(sorted(s[1:] for s in ALLOWED_SUFFIXES))
+        raise AppError(f"올릴 수 없는 파일 형식이에요. {allowed} 파일을 올려 주세요.")
+    return suffix
+
+
 def copy_upload(source, target, limit=None, message=TOO_LARGE_MESSAGE):
-    limit = limit or MAX_UPLOAD_BYTES
+    """받은 바이트 수를 돌려준다."""
+    limit = MAX_UPLOAD_BYTES if limit is None else limit
     copied = 0
     with open(target, "wb") as out:
         while chunk := source.read(1024 * 1024):
@@ -43,6 +52,7 @@ def copy_upload(source, target, limit=None, message=TOO_LARGE_MESSAGE):
             if copied > limit:
                 raise TooLarge(message)
             out.write(chunk)
+    return copied
 
 
 @router.get("/templates")
@@ -60,27 +70,35 @@ def list_jobs(jobs: Jobs):
 
 @router.post("/jobs", status_code=201)
 async def create_job(request: Request, jobs: Jobs, user: User):
-    # 웹 화면은 양식으로 보내고, 아이폰 단축어는 파일을 본문 그대로 보낼 수 있다.
+    """웹 화면은 양식으로 보내고, 아이폰 단축어는 파일을 본문 그대로 보낼 수 있다.
+
+    양식에 녹음을 여럿 담으면 담은 순서대로 이어 회의 하나로 만든다. 1GB는 모두 합친 크기다.
+    """
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     template = request.query_params.get("template", DEFAULT_TEMPLATE)
     require_template(template)
     job_id, job_dir = jobs.new_job_dir()
-    incoming = job_dir / "upload.tmp"
+    uploads = []
     try:
         if content_type == "multipart/form-data":
             async with request.form() as form:
-                upload = next((value for value in form.values() if isinstance(value, UploadFile)), None)
-                if upload is None:
+                files = [value for _, value in form.multi_items() if isinstance(value, UploadFile)]
+                if not files:
                     raise AppError("파일이 들어 있지 않아요. 녹음 파일을 올려 주세요.")
-                name = Path(upload.filename or "녹음").name[:200]
-                suffix = Path(name).suffix.lower()
-                if suffix not in ALLOWED_SUFFIXES:
-                    allowed = ", ".join(sorted(s[1:] for s in ALLOWED_SUFFIXES))
-                    raise AppError(f"올릴 수 없는 파일 형식이에요. {allowed} 파일을 올려 주세요.")
-                await run_in_threadpool(copy_upload, upload.file, incoming)
+                if len(files) > MAX_RECORDINGS:
+                    raise AppError(f"녹음은 한 회의에 {MAX_RECORDINGS}개까지 올릴 수 있어요.")
+                names = [Path(upload.filename or "녹음").name[:200] for upload in files]
+                suffixes = [audio_suffix(name) for name in names]
+                remaining = MAX_UPLOAD_BYTES
+                for number, (upload, suffix) in enumerate(zip(files, suffixes), 1):
+                    incoming = job_dir / f"upload-{number}.tmp"
+                    remaining -= await run_in_threadpool(copy_upload, upload.file, incoming, remaining)
+                    uploads.append((suffix, incoming))
+                name = names[0] if len(names) == 1 else f"{names[0]} 외 {len(names) - 1}개"
         else:
             suffix = RAW_SUFFIXES.get(content_type, ".m4a")
             name = f"아이폰 녹음{suffix}"
+            incoming = job_dir / "upload.tmp"
             copied = 0
             with open(incoming, "wb") as out:
                 async for chunk in request.stream():
@@ -88,8 +106,9 @@ async def create_job(request: Request, jobs: Jobs, user: User):
                     if copied > MAX_UPLOAD_BYTES:
                         raise TooLarge(TOO_LARGE_MESSAGE)
                     out.write(chunk)
+            uploads.append((suffix, incoming))
         owner = {"sub": user["sub"], "name": user["name"]} if user else None
-        return await run_in_threadpool(jobs.add, job_id, name, suffix, incoming, template, owner)
+        return await run_in_threadpool(jobs.add, job_id, name, uploads, template, owner)
     except Exception:
         logger.warning("업로드를 거절했다: content_type=%s", content_type)
         jobs.discard(job_id)
@@ -99,6 +118,22 @@ async def create_job(request: Request, jobs: Jobs, user: User):
 @router.get("/jobs/{job_id}")
 def read_job(job_id: str, jobs: Jobs):
     return jobs.detail(job_id)
+
+
+@router.post("/jobs/{job_id}/recordings")
+async def add_recording(job_id: str, request: Request, jobs: Jobs):
+    """회의 끝에 녹음을 하나 더 잇는다. 새 녹음만 전사하고 회의록은 다시 쓴다."""
+    incoming = jobs.recording_upload_path(job_id)
+    try:
+        async with request.form() as form:
+            upload = next((value for value in form.values() if isinstance(value, UploadFile)), None)
+            if upload is None:
+                raise AppError("파일이 들어 있지 않아요. 녹음 파일을 올려 주세요.")
+            suffix = audio_suffix(Path(upload.filename or "녹음").name)
+            await run_in_threadpool(copy_upload, upload.file, incoming)
+        return await run_in_threadpool(jobs.add_recording, job_id, suffix, incoming)
+    finally:
+        incoming.unlink(missing_ok=True)
 
 
 @router.post("/jobs/{job_id}/retry")

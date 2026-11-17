@@ -45,6 +45,12 @@ def default_process(audio, out_dir, on_stage, on_process):
     )
 
 
+def default_transcribe(audio, out_dir, on_process):
+    from meeting_notes.pipeline.transcribe import transcribe
+
+    transcribe(audio, out_dir, settings.current().glossary, on_process)
+
+
 def default_answer(transcript, notes_text, question, facts=()):
     from meeting_notes.questions import answer_question
 
@@ -60,13 +66,14 @@ def default_draft(meeting, actions, space, rules):
 def create_app(
     data_dir="jobs",
     process=default_process,
+    transcribe=default_transcribe,
     answer=default_answer,
     push_send=None,
     tracker="company",
     draft=default_draft,
     auth="company",
 ):
-    """process, answer, draft는 녹음 처리와 Claude 호출을 맡는다. 테스트에서는 가짜를 넘긴다.
+    """process, transcribe, answer, draft는 녹음 처리와 Claude 호출을 맡는다. 테스트에서는 가짜를 넘긴다.
 
     tracker와 auth를 "company"로 두면 회사 폴더의 설정으로 만든다.
     """
@@ -79,7 +86,7 @@ def create_app(
     memory = MemoryBook(data_dir)
     push_center = PushCenter(data_dir, send=push_send)
     upload_keys = UploadKeys(data_dir)
-    worker = Worker(store, process, voices, push_center)
+    worker = Worker(store, process, voices, push_center, transcribe)
     job_service = JobService(store, worker, voices, answer, issue_links=link_issues(tracker), memory=memory)
     services = Services(
         jobs=job_service,
