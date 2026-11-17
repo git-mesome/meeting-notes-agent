@@ -24,6 +24,19 @@
   font-size: 0.875rem;
 }
 
+/* 액션 아이템 표의 첫 칸 앞에 두는 체크 상자와 등록한 이슈 키(detail.js) */
+.issue-pick {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.45rem;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.issue-pick .issue-key {
+  margin: 0;
+}
+
 .issue-key {
   display: inline-block;
   margin: 0 0.15rem;

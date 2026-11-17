@@ -121,13 +121,16 @@ class FakeTracker(Tracker):
 
 
 def fake_draft(_meeting, actions, _space, _rules):
+    """회의록에서 체크한 할 일(actions)의 초안만 돌려준다."""
     time.sleep(3)
-    return [
+    picked = {action["index"] for action in actions}
+    drafts = [
         {"source": 0, "action": "create", "title": "본사 교체 작업 계획서 작성", "description": "## 배경\n- 회의 [01:05]\n\n## 요구사항\n- 본사 장비 교체 순서 정리\n\n## 완료 조건\n- [ ] 계획서 공유",
          "category": "기능", "priority": "보통", "assignees": ["박지훈"], "tags": ["플랫폼"], "parent": "PLT-1", "due_date": "", "existing_key": "", "comment": "", "reason": ""},
         {"source": 1, "action": "comment", "title": "", "description": "", "category": "기능", "priority": "보통", "assignees": [], "tags": [],
          "parent": "", "due_date": "", "existing_key": "PLT-2", "comment": "지점 교체는 2주 간격으로 진행 [01:40]", "reason": ""},
     ]
+    return [draft for draft in drafts if draft["source"] in picked]
 
 
 def create():

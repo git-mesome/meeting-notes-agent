@@ -67,8 +67,8 @@ class IssueService:
             found = list(pool.map(summary, issues[:MAX_DESCRIBED_ISSUES]))
         return found + [""] * (len(issues) - len(found))
 
-    def make(self, job, notes, actions):
-        """트래커의 현재 상태를 읽어 초안을 만들고, 트래커에 없는 값은 지운다."""
+    def make(self, job, notes, actions, selected):
+        """트래커의 현재 상태를 읽어 selected(고른 할 일)의 초안을 만들고, 트래커에 없는 값은 지운다."""
         tracker = self.tracker
         try:
             people, tags, issues = tracker.people(), tracker.tags(), tracker.open_issues()
@@ -88,7 +88,7 @@ class IssueService:
         rules = {"categories": tracker.categories, "priorities": tracker.priorities, "guide": tracker.guide}
         meeting = {"title": job.get("title") or job["name"], "date": job["created_at"][:10], "notes": notes}
         try:
-            drafts = self.draft(meeting, actions, space, rules)
+            drafts = self.draft(meeting, selected, space, rules)
         except Exception as error:
             logger.error("작업 %s 이슈 초안 생성에 실패했다", job["id"], exc_info=error)
             raise Upstream("이슈 초안을 만들지 못했어요. 잠시 후 다시 시도해 주세요.") from error
@@ -111,8 +111,11 @@ class IssueService:
             "issues": [{"key": issue["key"], "title": issue["title"]} for issue in issues],
         }
 
-    def drafts(self, job_id, refresh=False):
-        """저장한 초안을 돌려준다. 회의록이나 화자 이름이 바뀌었거나 refresh면 새로 만든다."""
+    def drafts(self, job_id, refresh=False, sources=None):
+        """저장한 초안을 돌려준다. 회의록이나 화자 이름이 바뀌었거나, 고른 할 일이 다르거나, refresh면 새로 만든다.
+
+        sources는 등록하려고 고른 할 일 번호다. 없으면 저장한 초안을 그대로 쓰고, 저장한 것도 없으면 모든 할 일로 만든다.
+        """
         self.require()
         job = self.jobs.get(job_id)
         self.jobs.require_done(job)
@@ -126,25 +129,35 @@ class IssueService:
             saved = json.loads(cache.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             saved = None
-        if refresh or not saved or saved.get("fingerprint") != fingerprint:
-            # 창을 닫았다 다시 열어도 초안을 두 번 만들지 않도록, 만드는 중이면 그 결과를 함께 기다린다.
+        current = saved if saved and saved.get("fingerprint") == fingerprint else None
+        everything = [action["index"] for action in actions]
+        if sources is None:
+            sources = current.get("sources", everything) if current else everything
+        sources = sorted({source for source in sources if 0 <= source < len(actions)})
+        if not sources:
+            raise AppError("등록할 할 일을 골라 주세요.")
+        # 고르기 전에 만든 초안에는 sources가 없다. 그때는 모든 할 일로 만들었다.
+        if refresh or not current or current.get("sources", everything) != sources:
+            # 창을 닫았다 다시 열어도 초안을 두 번 만들지 않도록, 같은 할 일을 만드는 중이면 그 결과를 함께 기다린다.
+            key = (job_id, tuple(sources))
             with self.lock:
-                future = self.drafting.get(job_id)
+                future = self.drafting.get(key)
                 owner = future is None
                 if owner:
-                    future = self.drafting[job_id] = Future()
+                    future = self.drafting[key] = Future()
             if owner:
                 try:
-                    saved = {"fingerprint": fingerprint, "drafted_at": now(), **self.make(job, notes, actions)}
-                    cache.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
-                    future.set_result(saved)
+                    made = self.make(job, notes, actions, [actions[source] for source in sources])
+                    current = {"fingerprint": fingerprint, "sources": sources, "drafted_at": now(), **made}
+                    cache.write_text(json.dumps(current, ensure_ascii=False), encoding="utf-8")
+                    future.set_result(current)
                 except BaseException as error:
                     future.set_exception(error)
                 finally:
                     with self.lock:
-                        self.drafting.pop(job_id, None)
-            saved = future.result()
-        body = {key: value for key, value in saved.items() if key != "fingerprint"}
+                        self.drafting.pop(key, None)
+            current = future.result()
+        body = {key: value for key, value in current.items() if key != "fingerprint"}
         return {**body, "registered": self.with_urls(job.get("issues") or [])}
 
     def register(self, job_id, create, comments):

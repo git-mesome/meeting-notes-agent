@@ -49,6 +49,10 @@ class IssueComment(BaseModel):
     text: str = Field(min_length=1, max_length=10_000)
 
 
+class DraftRequest(BaseModel):
+    sources: list[int] | None = Field(default=None, max_length=100)
+
+
 class IssueRegistration(BaseModel):
     create: list[IssueDraft] = Field(default_factory=list, max_length=20)
     comments: list[IssueComment] = Field(default_factory=list, max_length=20)

@@ -360,15 +360,51 @@ export function renderDetail(job, { justConfirmed = false, restore = null, start
     );
     if (!section) return;
     const registered = job.issues || [];
-    const openDrafts = () =>
-      openIssueSheet(job, status, () =>
-        api(`/api/jobs/${job.id}`).then((updated) => renderDetail(updated, { restore: currentView() })),
+    // sources가 없으면(완료 알림에서 열 때) 저장한 초안을 연다.
+    const openDrafts = (sources = null) =>
+      openIssueSheet(
+        job,
+        status,
+        () => api(`/api/jobs/${job.id}`).then((updated) => renderDetail(updated, { restore: currentView() })),
+        { sources },
       );
     if (openIssues) openDrafts();
-    // 등록 버튼은 "액션 아이템" 제목 줄 오른쪽, 수정 버튼 앞에 둔다.
-    section.querySelector(".section-actions").prepend(
-      button(registered.length ? `${status.name}에 더 등록` : `${status.name}에 등록`, { iconName: "issue", onclick: openDrafts }),
-    );
+    // 할 일마다 체크 상자를 두고 체크한 것만 초안을 만든다. 등록한 할 일에는 이슈 키를 보인다.
+    // 첫 칸의 글자 앞에 data-ui로 넣어 회의록을 고칠 때 마크다운에 들어가지 않는다(edit.js).
+    // 핸드폰에서는 칸이 [이름표, 내용] 두 칸 격자라 칸 안이 아니라 내용 안에 넣는다.
+    const done = new Map(registered.map((item) => [item.source, item]));
+    const picks = [];
+    const label = () => {
+      const count = picks.filter((pick) => pick.box.checked).length;
+      return count ? `${count}개 ${status.name}에 등록` : `${status.name}에 등록`;
+    };
+    section.querySelectorAll("table tbody tr").forEach((row, index) => {
+      const first = row.querySelector("td > div");
+      if (!first) return;
+      if (done.has(index)) {
+        first.prepend(el("span", { class: "issue-pick", "data-ui": "", contenteditable: "false" }, issueKey(done.get(index))));
+        return;
+      }
+      const box = el("input", { type: "checkbox", class: "check-box", "aria-label": `${status.name}에 올릴 할 일` });
+      box.addEventListener("change", () => {
+        register.lastChild.textContent = label();
+      });
+      picks.push({ box, index });
+      first.prepend(el("label", { class: "issue-pick", "data-ui": "", contenteditable: "false" }, box));
+    });
+    const register = button(label(), {
+      iconName: "issue",
+      onclick: () => {
+        const sources = picks.filter((pick) => pick.box.checked).map((pick) => pick.index);
+        if (!sources.length) {
+          toast(`${status.name}에 올릴 할 일을 체크해 주세요`, true);
+          return;
+        }
+        openDrafts(sources);
+      },
+    });
+    // 등록 버튼은 "액션 아이템" 제목 줄 오른쪽, 수정 버튼 앞에 둔다. 모두 등록했으면 두지 않는다.
+    if (picks.length) section.querySelector(".section-actions").prepend(register);
     if (registered.length) {
       section.querySelector(".section-head").after(el("p", { class: "issue-done", "data-ui": "" }, "등록함 ", ...registered.map(issueKey)));
     }

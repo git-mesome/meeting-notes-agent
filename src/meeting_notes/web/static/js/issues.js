@@ -131,7 +131,8 @@ export function draftsReady(job) {
   }
 }
 
-export function openIssueSheet(job, status, onDone, { refresh = false } = {}) {
+/* sources는 회의록에서 체크한 할 일 번호다. 없으면 저장한 초안을 연다. */
+export function openIssueSheet(job, status, onDone, { refresh = false, sources = null } = {}) {
   const pending = el("p", { class: "qa-pending", text: "할 일을 이슈 초안으로 만들고 있어요" });
   const body = el(
     "div",
@@ -158,7 +159,7 @@ export function openIssueSheet(job, status, onDone, { refresh = false } = {}) {
     if (loading) toast("창을 닫아도 초안은 계속 만들어요. 다 되면 알려 드릴게요.");
   });
 
-  api(`/api/jobs/${job.id}/issues/drafts${refresh ? "?refresh=true" : ""}`, { method: "POST" })
+  api(`/api/jobs/${job.id}/issues/drafts${refresh ? "?refresh=true" : ""}`, sources ? jsonOptions("POST", { sources }) : { method: "POST" })
     .then((data) => {
       loading = false;
       if (!sheet.open) {
@@ -234,7 +235,7 @@ export function openIssueSheet(job, status, onDone, { refresh = false } = {}) {
         text: "다시 만들기",
         onclick: () => {
           closeSheet();
-          openIssueSheet(job, status, onDone, { refresh: true });
+          openIssueSheet(job, status, onDone, { refresh: true, sources: data.sources });
         },
       });
       body.replaceChildren(

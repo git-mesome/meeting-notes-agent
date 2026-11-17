@@ -301,6 +301,29 @@ def test_drafts_are_kept_until_notes_change(tmp_path, tone):
         assert len(calls) == 3 and "홍길동" in calls[-1]
 
 
+def test_only_checked_items_are_drafted(tmp_path, tone):
+    calls = []
+
+    def draft(meeting, actions, space, rules):
+        calls.append([action["index"] for action in actions])
+        return [item for item in fake_draft(meeting, actions, space, rules) if item["source"] in calls[-1]]
+
+    with make(tmp_path, FakeTracker(), draft) as client:
+        job_id = finished_job(client, tone)
+        url = f"/api/jobs/{job_id}/issues/drafts"
+        picked = client.post(url, json={"sources": [1]}).json()
+        assert calls == [[1]]
+        assert picked["sources"] == [1] and [item["source"] for item in picked["drafts"]] == [1]
+        # 초안 창은 할 일 번호로 회의록의 할 일을 찾으므로 할 일은 모두 보낸다.
+        assert len(picked["actions"]) == 2
+        # 고른 것 없이 다시 열면(완료 알림에서 열 때) 저장한 초안을 그대로 쓴다.
+        assert client.post(url).json()["drafts"] == picked["drafts"] and len(calls) == 1
+        client.post(url, json={"sources": [1, 0]})
+        assert calls[-1] == [0, 1]
+        refused = client.post(url, json={"sources": [7]})
+        assert refused.status_code == 400 and refused.json()["detail"] == "등록할 할 일을 골라 주세요."
+
+
 def test_drafts_requested_twice_are_made_once(tmp_path, tone):
     started, release, calls = threading.Event(), threading.Event(), []
 

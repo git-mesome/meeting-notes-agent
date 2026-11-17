@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from meeting_notes.jobs.access import EDIT
 from meeting_notes.web.deps import Issues, Jobs
-from meeting_notes.web.schemas import IssueRegistration
+from meeting_notes.web.schemas import DraftRequest, IssueRegistration
 
 router = APIRouter(prefix="/api")
 
@@ -15,9 +15,10 @@ def tracker_status(issues: Issues):
 
 
 @router.post("/jobs/{job_id}/issues/drafts")
-def issue_drafts(job_id: str, issues: Issues, jobs: Jobs, refresh: bool = False):
+def issue_drafts(job_id: str, issues: Issues, jobs: Jobs, refresh: bool = False, body: DraftRequest | None = None):
+    """body.sources는 회의록에서 체크한 할 일 번호다. 없으면 저장한 초안을 쓴다."""
     jobs.get(job_id, EDIT)
-    return issues.drafts(job_id, refresh)
+    return issues.drafts(job_id, refresh, body.sources if body else None)
 
 
 @router.post("/jobs/{job_id}/issues")
